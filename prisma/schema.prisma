@@ -1,0 +1,214 @@
+// ─────────────────────────────────────────────────────────────
+// AI Interviewer — Database Schema
+// ─────────────────────────────────────────────────────────────
+// This schema defines the core data model for the AI-powered
+// interview platform. It uses PostgreSQL with Prisma ORM.
+//
+// Relationships:
+//   User  1:N  Interview
+//   Interview  1:N  Question
+//   Question   1:1  Response
+//   Response   1:1  Evaluation
+//   Interview  1:1  Report
+//   Interview  1:N  ActivityEvent
+// ─────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  CANDIDATE
+  ADMIN
+}
+
+enum InterviewStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestionType {
+  BEHAVIORAL
+  TECHNICAL
+  CODING
+  SYSTEM_DESIGN
+}
+
+enum ActivityType {
+  TAB_SWITCH
+  COPY
+  PASTE
+  FULLSCREEN_EXIT
+  WINDOW_BLUR
+  SUSPICIOUS_TYPING
+}
+
+// ─────────────────────────────────────────────────────────────
+// MODELS
+// ─────────────────────────────────────────────────────────────
+
+/// Registered users of the platform
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  image         String?  // Avatar URL (from OAuth provider)
+  passwordHash  String?  // Null if using OAuth only
+  role          Role     @default(CANDIDATE)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  interviews    Interview[]
+
+  @@map("users")
+}
+
+/// A single interview session
+model Interview {
+  id            String          @id @default(cuid())
+  title         String          // e.g. "Senior Frontend Developer Interview"
+  jobRole       String          // e.g. "Frontend Developer", "Backend Engineer"
+  difficulty    Difficulty      @default(MEDIUM)
+  topics        String[]        // e.g. ["React", "TypeScript", "System Design"]
+  status        InterviewStatus @default(PENDING)
+  totalScore    Float?          // Overall score (0-100), set after completion
+
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  // Relations
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questions     Question[]
+  report        Report?
+  activities    ActivityEvent[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("interviews")
+}
+
+/// A single question asked during an interview
+model Question {
+  id            String       @id @default(cuid())
+  orderIndex    Int          // Position in the interview (1, 2, 3...)
+  type          QuestionType
+  content       String       // The question text
+  context       String?      // Additional context or code snippet
+  expectedTopics String[]    // Topics the answer should cover
+
+  createdAt     DateTime     @default(now())
+
+  // Relations
+  interviewId   String
+  interview     Interview    @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  response      Response?
+
+  @@index([interviewId])
+  @@map("questions")
+}
+
+/// The candidate's response to a question
+model Response {
+  id            String     @id @default(cuid())
+  content       String     // The candidate's answer (text)
+  code          String?    // Code submitted (for coding questions)
+  language      String?    // Programming language used
+  durationMs    Int?       // Time taken to answer in milliseconds
+
+  createdAt     DateTime   @default(now())
+
+  // Relations
+  questionId    String     @unique
+  question      Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  evaluation    Evaluation?
+
+  @@map("responses")
+}
+
+/// AI evaluation of a candidate's response
+model Evaluation {
+  id              String   @id @default(cuid())
+  score           Float    // Score for this response (0-10)
+  feedback        String   // Detailed feedback text
+  strengths       String[] // What the candidate did well
+  weaknesses      String[] // Areas for improvement
+  followUpAsked   Boolean  @default(false)
+
+  // Code-specific evaluation (nullable for non-coding questions)
+  codeCorrectness Float?   // 0-10
+  codeEfficiency  Float?   // 0-10
+  codeReadability Float?   // 0-10
+  testCasesPassed Int?     // Number of test cases passed
+  testCasesTotal  Int?     // Total number of test cases
+
+  createdAt       DateTime @default(now())
+
+  // Relations
+  responseId      String   @unique
+  response        Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  @@map("evaluations")
+}
+
+/// Comprehensive interview report generated after completion
+model Report {
+  id                  String   @id @default(cuid())
+  overallScore        Float    // 0-100
+  summary             String   // Executive summary
+  technicalScore      Float    // Technical knowledge score (0-100)
+  communicationScore  Float    // Communication quality (0-100)
+  problemSolvingScore Float    // Problem-solving ability (0-100)
+  codeQualityScore    Float?   // Code quality (0-100), null if no coding
+
+  strengths           String[] // Overall strengths
+  weaknesses          String[] // Overall weaknesses
+  recommendations     String[] // Actionable improvement suggestions
+  detailedFeedback    Json     // Full structured feedback from LLM
+
+  createdAt           DateTime @default(now())
+
+  // Relations
+  interviewId         String   @unique
+  interview           Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+/// Activity events tracked during an interview (for monitoring)
+model ActivityEvent {
+  id          String       @id @default(cuid())
+  type        ActivityType
+  description String?      // Human-readable description
+  metadata    Json?        // Extra data (e.g., clipboard content length)
+  timestamp   DateTime     @default(now())
+
+  // Relations
+  interviewId String
+  interview   Interview    @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@index([interviewId])
+  @@index([timestamp])
+  @@map("activity_events")
+}
