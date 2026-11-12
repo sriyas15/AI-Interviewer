@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import {
   BrainCircuit,
@@ -7,6 +8,26 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { auth } from "@/auth";
+import { UserNav } from "@/components/auth/user-nav";
+
+async function AuthNav() {
+  const session = await auth();
+  return <UserNav user={session?.user} />;
+}
+
+function NavFallback() {
+  return (
+    <div className="nav-actions">
+      <Link href="/login" className="btn btn-ghost">
+        Sign In
+      </Link>
+      <Link href="/register" className="btn btn-primary">
+        Get Started
+      </Link>
+    </div>
+  );
+}
 
 const features = [
   {
@@ -64,14 +85,9 @@ export default function HomePage() {
             <BrainCircuit size={28} strokeWidth={1.5} />
             <span>AI Interviewer</span>
           </div>
-          <div className="nav-actions">
-            <Link href="/login" className="btn btn-ghost">
-              Sign In
-            </Link>
-            <Link href="/register" className="btn btn-primary">
-              Get Started
-            </Link>
-          </div>
+          <Suspense fallback={<NavFallback />}>
+            <AuthNav />
+          </Suspense>
         </div>
       </nav>
 

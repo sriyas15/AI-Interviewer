@@ -121,6 +121,29 @@ export const reportSchema = z.object({
     .describe("Actionable suggestions for improvement"),
 });
 
+export const loginSchema = z.object({
+  email: z.string().email("Please enter a valid email address"),
+  password: z.string().min(1, "Password is required"),
+});
+
+export const registerSchema = z
+  .object({
+    name: z.string().min(2, "Name must be at least 2 characters").max(50),
+    email: z.string().email("Please enter a valid email address"),
+    password: z
+      .string()
+      .min(8, "Password must be at least 8 characters")
+      .regex(
+        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+        "Password must contain uppercase, lowercase, and a number"
+      ),
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
 // ─── Inferred Types ──────────────────────────────────────────
 // These types are auto-generated from the Zod schemas above.
 
@@ -130,3 +153,5 @@ export type ActivityEventInput = z.infer<typeof activityEventSchema>;
 export type QuestionGeneration = z.infer<typeof questionGenerationSchema>;
 export type EvaluationOutput = z.infer<typeof evaluationSchema>;
 export type ReportOutput = z.infer<typeof reportSchema>;
+export type LoginInput = z.infer<typeof loginSchema>;
+export type RegisterInput = z.infer<typeof registerSchema>;
