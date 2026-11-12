@@ -46,3 +46,4 @@ export async function createInterview(
 
   redirect(`/interview/${interview.id}/start`);
 }
+
