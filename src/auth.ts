@@ -3,6 +3,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
+import { Role } from "@prisma/client";
 import { db } from "@/lib/db";
 import { loginSchema } from "@/lib/validations";
 
@@ -68,16 +69,19 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = (user as any).role;
+        if (user.role) {
+          token.role = user.role;
+        }
       }
       return token;
     },
     async session({ session, token }) {
       if (token && session.user) {
-        session.user.id = (token.id as string) || (token.sub as string);
-        session.user.role = token.role as any;
+        session.user.id = (token.id as string) || (token.sub as string) || "";
+        session.user.role = (token.role as Role) || Role.CANDIDATE;
       }
       return session;
     },
   },
 });
+

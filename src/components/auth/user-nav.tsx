@@ -28,6 +28,19 @@ export function UserNav({ user }: UserNavProps) {
 
   return (
     <div className="nav-actions" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+        {user.image ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={user.image}
+            alt={user.name || "User"}
+            style={{ width: "26px", height: "26px", borderRadius: "50%", objectFit: "cover" }}
+          />
+        ) : (
+          <UserIcon size={16} />
+        )}
+        <span>{user.name?.split(" ")[0] || "Candidate"}</span>
+      </div>
       <Link href="/dashboard" className="btn btn-secondary btn-sm">
         <LayoutDashboard size={16} />
         <span>Dashboard</span>
@@ -43,3 +56,4 @@ export function UserNav({ user }: UserNavProps) {
     </div>
   );
 }
+

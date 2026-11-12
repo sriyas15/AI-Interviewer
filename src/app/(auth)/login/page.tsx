@@ -4,7 +4,7 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { BrainCircuit, AlertCircle, Loader2 } from "lucide-react";
+import { BrainCircuit, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff } from "lucide-react";
 import { GoogleButton } from "@/components/auth/google-button";
 
 function LoginForm() {
@@ -16,19 +16,44 @@ function LoginForm() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(
     urlError ? "Authentication failed. Please check your credentials." : null
   );
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
+
+  function validate(): boolean {
+    const errors: { email?: string; password?: string } = {};
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!email.trim()) {
+      errors.email = "Email address is required";
+    } else if (!emailRegex.test(email)) {
+      errors.email = "Please enter a valid email address";
+    }
+
+    if (!password) {
+      errors.password = "Password is required";
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (!validate()) {
+      return;
+    }
+
     setIsLoading(true);
 
     try {
       const res = await signIn("credentials", {
-        email,
+        email: email.trim().toLowerCase(),
         password,
         redirect: false,
       });
@@ -60,6 +85,7 @@ function LoginForm() {
 
       {registered && (
         <div className="auth-alert auth-alert-success">
+          <CheckCircle2 size={16} />
           <span>Account created successfully! Please sign in.</span>
         </div>
       )}
@@ -79,7 +105,7 @@ function LoginForm() {
       </div>
 
       {/* Email / Password Form */}
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit} noValidate>
         <div className="form-group">
           <label className="form-label" htmlFor="email">
             Email Address
@@ -92,26 +118,45 @@ function LoginForm() {
             placeholder="you@example.com"
             className="input"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: undefined }));
+            }}
             disabled={isLoading}
           />
+          {fieldErrors.email && <p className="form-error">{fieldErrors.email}</p>}
         </div>
 
         <div className="form-group">
           <label className="form-label" htmlFor="password">
             Password
           </label>
-          <input
-            id="password"
-            type="password"
-            required
-            autoComplete="current-password"
-            placeholder="••••••••"
-            className="input"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={isLoading}
-          />
+          <div className="password-input-wrapper">
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              required
+              autoComplete="current-password"
+              placeholder="••••••••"
+              className="input"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: undefined }));
+              }}
+              disabled={isLoading}
+            />
+            <button
+              type="button"
+              className="password-toggle-btn"
+              onClick={() => setShowPassword((prev) => !prev)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          {fieldErrors.password && <p className="form-error">{fieldErrors.password}</p>}
         </div>
 
         <button
@@ -144,10 +189,7 @@ export default function LoginPage() {
     <Suspense
       fallback={
         <div className="card-glass auth-card text-center py-12">
-          <Loader2
-            className="animate-spin mx-auto text-primary"
-            size={24}
-          />
+          <Loader2 className="animate-spin mx-auto text-primary" size={24} />
         </div>
       }
     >

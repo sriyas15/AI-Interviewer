@@ -122,16 +122,16 @@ export const reportSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
-  password: z.string().min(1, "Password is required"),
+  email: z.string().trim().email("Please enter a valid email address"),
+  password: z.string().trim().min(8, "Password must be at least 8 characters"),
 });
 
 export const registerSchema = z
   .object({
-    name: z.string().min(2, "Name must be at least 2 characters").max(50),
-    email: z.string().email("Please enter a valid email address"),
+    name: z.string().trim().min(2, "Name must be at least 2 characters").max(50),
+    email: z.string().trim().email("Please enter a valid email address"),
     password: z
-      .string()
+      .string().trim()
       .min(8, "Password must be at least 8 characters")
       .regex(
         /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,

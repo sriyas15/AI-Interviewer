@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { BrainCircuit, AlertCircle, Loader2 } from "lucide-react";
+import { BrainCircuit, AlertCircle, Loader2, Eye, EyeOff, Check, X } from "lucide-react";
 import { GoogleButton } from "@/components/auth/google-button";
 import { registerUser } from "@/actions/auth";
 
@@ -14,17 +14,51 @@ function RegisterForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [isLoading, setIsLoading] = useState(false);
+
+  // Live password validation checks
+  const passwordChecks = {
+    length: password.length >= 8,
+    lowercase: /[a-z]/.test(password),
+    uppercase: /[A-Z]/.test(password),
+    number: /\d/.test(password),
+  };
+  const isPasswordValid = Object.values(passwordChecks).every(Boolean);
+
+  function validate(): boolean {
+    const errors: Record<string, string[]> = {};
+
+    if (!name.trim() || name.trim().length < 2) {
+      errors.name = ["Name must be at least 2 characters"];
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email.trim() || !emailRegex.test(email.trim())) {
+      errors.email = ["Please enter a valid email address"];
+    }
+
+    if (!isPasswordValid) {
+      errors.password = ["Password does not meet all security requirements"];
+    }
+
+    if (password !== confirmPassword) {
+      errors.confirmPassword = ["Passwords do not match"];
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setFieldErrors({});
 
-    if (password !== confirmPassword) {
-      setError("Passwords do not match");
+    if (!validate()) {
       return;
     }
 
@@ -32,8 +66,8 @@ function RegisterForm() {
 
     try {
       const result = await registerUser({
-        name,
-        email,
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
         password,
         confirmPassword,
       });
@@ -47,7 +81,7 @@ function RegisterForm() {
         return;
       }
 
-      // Successful registration - redirect to login
+      // Successful registration - redirect to login with query param
       router.push("/login?registered=true");
     } catch (err) {
       console.error("Registration submission error:", err);
@@ -81,7 +115,7 @@ function RegisterForm() {
       </div>
 
       {/* Registration Form */}
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit} noValidate>
         <div className="form-group">
           <label className="form-label" htmlFor="name">
             Full Name
@@ -94,10 +128,13 @@ function RegisterForm() {
             placeholder="Ada Lovelace"
             className="input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: [] }));
+            }}
             disabled={isLoading}
           />
-          {fieldErrors.name && (
+          {fieldErrors.name?.[0] && (
             <p className="form-error">{fieldErrors.name[0]}</p>
           )}
         </div>
@@ -114,10 +151,13 @@ function RegisterForm() {
             placeholder="you@example.com"
             className="input"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: [] }));
+            }}
             disabled={isLoading}
           />
-          {fieldErrors.email && (
+          {fieldErrors.email?.[0] && (
             <p className="form-error">{fieldErrors.email[0]}</p>
           )}
         </div>
@@ -126,19 +166,51 @@ function RegisterForm() {
           <label className="form-label" htmlFor="password">
             Password
           </label>
-          <input
-            id="password"
-            type="password"
-            required
-            autoComplete="new-password"
-            placeholder="At least 8 characters with numbers"
-            className="input"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={isLoading}
-          />
-          {fieldErrors.password && (
+          <div className="password-input-wrapper">
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              required
+              autoComplete="new-password"
+              placeholder="At least 8 characters"
+              className="input"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: [] }));
+              }}
+              disabled={isLoading}
+            />
+            <button
+              type="button"
+              className="password-toggle-btn"
+              onClick={() => setShowPassword((prev) => !prev)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          {fieldErrors.password?.[0] && (
             <p className="form-error">{fieldErrors.password[0]}</p>
+          )}
+
+          {/* Password criteria checklist */}
+          {password.length > 0 && (
+            <div style={{ marginTop: "0.5rem", fontSize: "0.75rem", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.25rem" }}>
+              <span style={{ color: passwordChecks.length ? "var(--color-success)" : "var(--text-tertiary)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                {passwordChecks.length ? <Check size={12} /> : <X size={12} />} 8+ chars
+              </span>
+              <span style={{ color: passwordChecks.uppercase ? "var(--color-success)" : "var(--text-tertiary)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                {passwordChecks.uppercase ? <Check size={12} /> : <X size={12} />} 1 uppercase
+              </span>
+              <span style={{ color: passwordChecks.lowercase ? "var(--color-success)" : "var(--text-tertiary)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                {passwordChecks.lowercase ? <Check size={12} /> : <X size={12} />} 1 lowercase
+              </span>
+              <span style={{ color: passwordChecks.number ? "var(--color-success)" : "var(--text-tertiary)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                {passwordChecks.number ? <Check size={12} /> : <X size={12} />} 1 number
+              </span>
+            </div>
           )}
         </div>
 
@@ -146,18 +218,32 @@ function RegisterForm() {
           <label className="form-label" htmlFor="confirmPassword">
             Confirm Password
           </label>
-          <input
-            id="confirmPassword"
-            type="password"
-            required
-            autoComplete="new-password"
-            placeholder="Re-enter your password"
-            className="input"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            disabled={isLoading}
-          />
-          {fieldErrors.confirmPassword && (
+          <div className="password-input-wrapper">
+            <input
+              id="confirmPassword"
+              type={showConfirmPassword ? "text" : "password"}
+              required
+              autoComplete="new-password"
+              placeholder="Re-enter your password"
+              className="input"
+              value={confirmPassword}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                if (fieldErrors.confirmPassword) setFieldErrors((prev) => ({ ...prev, confirmPassword: [] }));
+              }}
+              disabled={isLoading}
+            />
+            <button
+              type="button"
+              className="password-toggle-btn"
+              onClick={() => setShowConfirmPassword((prev) => !prev)}
+              aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+              tabIndex={-1}
+            >
+              {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          {fieldErrors.confirmPassword?.[0] && (
             <p className="form-error">{fieldErrors.confirmPassword[0]}</p>
           )}
         </div>
@@ -191,10 +277,7 @@ export default function RegisterPage() {
     <Suspense
       fallback={
         <div className="card-glass auth-card text-center py-12">
-          <Loader2
-            className="animate-spin mx-auto text-primary"
-            size={24}
-          />
+          <Loader2 className="animate-spin mx-auto text-primary" size={24} />
         </div>
       }
     >
