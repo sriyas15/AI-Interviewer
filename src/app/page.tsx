@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import { getCurrentUser } from "@/lib/session";
+import { SignOutButton } from "@/components/auth/sign-out-button";
 import {
   BrainCircuit,
   Code2,
@@ -47,6 +50,42 @@ const features = [
   },
 ];
 
+async function NavUserActions() {
+  const user = await getCurrentUser();
+  if (user) {
+    return (
+      <div className="flex items-center gap-3">
+        <Link href="/dashboard" className="btn btn-primary btn-sm">
+          Dashboard
+        </Link>
+        <SignOutButton className="btn btn-ghost btn-sm" />
+      </div>
+    );
+  }
+  return (
+    <>
+      <Link href="/login" className="btn btn-ghost">
+        Sign In
+      </Link>
+      <Link href="/register" className="btn btn-primary">
+        Get Started
+      </Link>
+    </>
+  );
+}
+
+async function HeroAction() {
+  const user = await getCurrentUser();
+  return (
+    <Link
+      href={user ? "/dashboard" : "/register"}
+      className="btn btn-primary btn-lg"
+    >
+      {user ? "Go to Dashboard" : "Start Practicing Free"}
+    </Link>
+  );
+}
+
 export default function HomePage() {
   return (
     <div className="home-page">
@@ -65,12 +104,15 @@ export default function HomePage() {
             <span>AI Interviewer</span>
           </div>
           <div className="nav-actions">
-            <Link href="/login" className="btn btn-ghost">
-              Sign In
-            </Link>
-            <Link href="/register" className="btn btn-primary">
-              Get Started
-            </Link>
+            <Suspense
+              fallback={
+                <Link href="/login" className="btn btn-ghost">
+                  Sign In
+                </Link>
+              }
+            >
+              <NavUserActions />
+            </Suspense>
           </div>
         </div>
       </nav>
@@ -93,9 +135,15 @@ export default function HomePage() {
             questions.
           </p>
           <div className="hero-actions animate-slide-up">
-            <Link href="/register" className="btn btn-primary btn-lg">
-              Start Practicing Free
-            </Link>
+            <Suspense
+              fallback={
+                <Link href="/register" className="btn btn-primary btn-lg">
+                  Start Practicing Free
+                </Link>
+              }
+            >
+              <HeroAction />
+            </Suspense>
             <Link href="#features" className="btn btn-secondary btn-lg">
               See Features
             </Link>

@@ -1,23 +1,46 @@
 import { PrismaClient, Difficulty, QuestionType, InterviewStatus, Role } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log("🌱 Starting database seed...");
 
+  const candidatePasswordHash = await bcrypt.hash("Password123!", 10);
+  const adminPasswordHash = await bcrypt.hash("Admin123!", 10);
+
   // 1. Create a dummy candidate user
   const user = await prisma.user.upsert({
     where: { email: "candidate@example.com" },
-    update: {},
+    update: {
+      passwordHash: candidatePasswordHash,
+    },
     create: {
       email: "candidate@example.com",
       name: "Alex Morgan",
       role: Role.CANDIDATE,
+      passwordHash: candidatePasswordHash,
       image: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
     },
   });
 
-  console.log(`👤 Created/found user: ${user.name} (${user.email})`);
+  // 1b. Create an admin user for RBAC testing
+  const adminUser = await prisma.user.upsert({
+    where: { email: "admin@example.com" },
+    update: {
+      passwordHash: adminPasswordHash,
+    },
+    create: {
+      email: "admin@example.com",
+      name: "Admin Officer",
+      role: Role.ADMIN,
+      passwordHash: adminPasswordHash,
+      image: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
+    },
+  });
+
+  console.log(`👤 Created/found candidate: ${user.name} (${user.email})`);
+  console.log(`🛡️ Created/found admin: ${adminUser.name} (${adminUser.email})`);
 
   // 2. Create a completed mock interview with questions, responses, evaluations, and report
   const completedInterview = await prisma.interview.create({
