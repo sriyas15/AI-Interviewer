@@ -1,17 +1,28 @@
 import NextAuth from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
+import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
+import { Role } from "@prisma/client";
 import { db } from "@/lib/db";
 import { loginSchema } from "@/lib/validations";
-import { authConfig } from "@/auth.config";
-import { Role } from "@prisma/client";
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  ...authConfig,
+export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: PrismaAdapter(db),
+  session: {
+    strategy: "jwt",
+  },
+  pages: {
+    signIn: "/login",
+    error: "/login",
+  },
   providers: [
-    ...authConfig.providers,
+    Google({
+      clientId: process.env.AUTH_GOOGLE_ID || process.env.GOOGLE_CLIENT_ID,
+      clientSecret:
+        process.env.AUTH_GOOGLE_SECRET || process.env.GOOGLE_CLIENT_SECRET,
+      allowDangerousEmailAccountLinking: true,
+    }),
     Credentials({
       name: "credentials",
       credentials: {
@@ -25,26 +36,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         const { email, password } = validated.data;
+        const normalizedEmail = email.toLowerCase().trim();
 
         const user = await db.user.findUnique({
-          where: { email: email.toLowerCase() },
+          where: { email: normalizedEmail },
         });
 
-        // Fail safely if user does not exist or has no password (e.g., Google OAuth only)
         if (!user || !user.passwordHash) {
           return null;
         }
 
-        const isPasswordMatch = await bcrypt.compare(password, user.passwordHash);
-        if (!isPasswordMatch) {
+        const passwordsMatch = await bcrypt.compare(
+          password,
+          user.passwordHash
+        );
+
+        if (!passwordsMatch) {
           return null;
         }
 
-        // Return user object without sensitive fields (passwordHash is omitted)
         return {
           id: user.id,
-          name: user.name,
           email: user.email,
+          name: user.name,
           image: user.image,
           role: user.role,
         };
@@ -52,17 +66,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
-    ...authConfig.callbacks,
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = (user as { role?: Role }).role || Role.CANDIDATE;
+        if (user.role) {
+          token.role = user.role;
+        }
       }
       return token;
     },
     async session({ session, token }) {
-      if (session.user && token) {
-        session.user.id = token.id as string;
+      if (token && session.user) {
+        session.user.id = (token.id as string) || (token.sub as string) || "";
         session.user.role = (token.role as Role) || Role.CANDIDATE;
       }
       return session;

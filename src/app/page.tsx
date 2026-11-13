@@ -1,7 +1,5 @@
-import Link from "next/link";
 import { Suspense } from "react";
-import { getCurrentUser } from "@/lib/session";
-import { SignOutButton } from "@/components/auth/sign-out-button";
+import Link from "next/link";
 import {
   BrainCircuit,
   Code2,
@@ -10,6 +8,26 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { auth } from "@/auth";
+import { UserNav } from "@/components/auth/user-nav";
+
+async function AuthNav() {
+  const session = await auth();
+  return <UserNav user={session?.user} />;
+}
+
+function NavFallback() {
+  return (
+    <div className="nav-actions">
+      <Link href="/login" className="btn btn-ghost">
+        Sign In
+      </Link>
+      <Link href="/register" className="btn btn-primary">
+        Get Started
+      </Link>
+    </div>
+  );
+}
 
 const features = [
   {
@@ -50,42 +68,6 @@ const features = [
   },
 ];
 
-async function NavUserActions() {
-  const user = await getCurrentUser();
-  if (user) {
-    return (
-      <div className="flex items-center gap-3">
-        <Link href="/dashboard" className="btn btn-primary btn-sm">
-          Dashboard
-        </Link>
-        <SignOutButton className="btn btn-ghost btn-sm" />
-      </div>
-    );
-  }
-  return (
-    <>
-      <Link href="/login" className="btn btn-ghost">
-        Sign In
-      </Link>
-      <Link href="/register" className="btn btn-primary">
-        Get Started
-      </Link>
-    </>
-  );
-}
-
-async function HeroAction() {
-  const user = await getCurrentUser();
-  return (
-    <Link
-      href={user ? "/dashboard" : "/register"}
-      className="btn btn-primary btn-lg"
-    >
-      {user ? "Go to Dashboard" : "Start Practicing Free"}
-    </Link>
-  );
-}
-
 export default function HomePage() {
   return (
     <div className="home-page">
@@ -103,17 +85,9 @@ export default function HomePage() {
             <BrainCircuit size={28} strokeWidth={1.5} />
             <span>AI Interviewer</span>
           </div>
-          <div className="nav-actions">
-            <Suspense
-              fallback={
-                <Link href="/login" className="btn btn-ghost">
-                  Sign In
-                </Link>
-              }
-            >
-              <NavUserActions />
-            </Suspense>
-          </div>
+          <Suspense fallback={<NavFallback />}>
+            <AuthNav />
+          </Suspense>
         </div>
       </nav>
 
@@ -135,15 +109,9 @@ export default function HomePage() {
             questions.
           </p>
           <div className="hero-actions animate-slide-up">
-            <Suspense
-              fallback={
-                <Link href="/register" className="btn btn-primary btn-lg">
-                  Start Practicing Free
-                </Link>
-              }
-            >
-              <HeroAction />
-            </Suspense>
+            <Link href="/register" className="btn btn-primary btn-lg">
+              Start Practicing Free
+            </Link>
             <Link href="#features" className="btn btn-secondary btn-lg">
               See Features
             </Link>

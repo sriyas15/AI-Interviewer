@@ -1,182 +1,171 @@
-import { Suspense } from "react";
-import { getCurrentUser } from "@/lib/session";
+import { auth } from "@/auth";
+import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
 import {
   BrainCircuit,
-  Shield,
-  User as UserIcon,
-  Play,
-  FileText,
+  LogOut,
+  Plus,
+  BookOpen,
+  CheckCircle2,
   Clock,
-  Sparkles,
-  ArrowRight,
-  Loader2,
+  ListChecks,
+  LayoutDashboard,
 } from "lucide-react";
-import { SignOutButton } from "@/components/auth/sign-out-button";
-import { Role } from "@prisma/client";
+import { signOut } from "@/auth";
+import { InterviewList } from "@/components/dashboard/interview-list";
+import { StatsGrid } from "@/components/dashboard/stats-grid";
+import { EmptyState } from "@/components/dashboard/empty-state";
 
-async function DashboardContent() {
-  const user = await getCurrentUser();
+// This page requires auth + DB — intentionally dynamic, not statically prerendered
+export const instant = false;
 
-  if (!user) {
-    redirect("/login?callbackUrl=/dashboard");
+export default async function DashboardPage() {
+  const session = await auth();
+
+  if (!session?.user?.id) {
+    redirect("/login");
   }
 
-  const isAdmin = user.role === Role.ADMIN;
+  // Candidate-safe query: no scores, evaluations, or reports
+  const [interviews, user] = await Promise.all([
+    db.interview.findMany({
+      where: { userId: session.user.id },
+      select: {
+        id: true,
+        title: true,
+        jobRole: true,
+        difficulty: true,
+        topics: true,
+        status: true,
+        createdAt: true,
+        startedAt: true,
+        completedAt: true,
+        _count: { select: { questions: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    db.user.findUnique({
+      where: { id: session.user.id },
+      select: { name: true, email: true, image: true },
+    }),
+  ]);
+
+  const totalInterviews = interviews.length;
+  const completedInterviews = interviews.filter((i) => i.status === "COMPLETED").length;
+  const inProgressInterviews = interviews.filter((i) => i.status === "IN_PROGRESS").length;
+  const pendingInterviews = interviews.filter((i) => i.status === "PENDING").length;
+
+  const displayName = user?.name || session.user.name || "Candidate";
+  const firstName = displayName.split(" ")[0];
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      {/* Ambient background */}
-      <div className="ambient-bg" aria-hidden="true">
-        <div className="ambient-orb ambient-orb-1" />
-        <div className="ambient-orb ambient-orb-2" />
-      </div>
-
-      {/* Navigation */}
-      <nav className="nav border-b border-[var(--surface-border)]">
-        <div className="nav-inner max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2.5 font-semibold text-lg">
-            <div className="w-8 h-8 rounded-lg bg-[var(--color-primary-subtle)] flex items-center justify-center text-[var(--color-primary)]">
-              <BrainCircuit size={20} strokeWidth={2} />
-            </div>
+    <div className="dashboard-page">
+      {/* ─── Top Nav ─── */}
+      <nav className="dashboard-nav">
+        <div className="dashboard-nav-inner">
+          <Link href="/" className="nav-brand">
+            <BrainCircuit size={24} strokeWidth={1.5} />
             <span>AI Interviewer</span>
           </Link>
-
-          <div className="flex items-center gap-3">
-            {isAdmin && (
-              <Link
-                href="/admin"
-                className="btn btn-secondary btn-sm flex items-center gap-1.5 border-[rgba(255,170,0,0.3)] text-[var(--color-warning)]"
-              >
-                <Shield size={14} />
-                <span>Admin Portal</span>
-              </Link>
-            )}
-            <SignOutButton />
+          <div className="dashboard-nav-right">
+            <div className="candidate-badge">
+              <LayoutDashboard size={13} />
+              <span>Candidate</span>
+            </div>
+            <div className="nav-user">
+              {user?.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={user.image}
+                  alt={displayName}
+                  className="nav-avatar"
+                />
+              ) : (
+                <div className="nav-avatar-placeholder">
+                  {firstName[0].toUpperCase()}
+                </div>
+              )}
+              <span className="nav-user-name">{firstName}</span>
+            </div>
+            <form
+              action={async () => {
+                "use server";
+                await signOut({ redirectTo: "/" });
+              }}
+            >
+              <button type="submit" className="btn btn-ghost btn-sm">
+                <LogOut size={15} />
+                <span>Sign Out</span>
+              </button>
+            </form>
           </div>
         </div>
       </nav>
 
-      {/* Main Content */}
-      <main className="max-w-6xl mx-auto px-6 py-10 relative z-10">
-        {/* Profile Banner */}
-        <div className="card-glass p-8 mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6 border border-[var(--surface-border)] rounded-2xl">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full bg-[var(--bg-tertiary)] border-2 border-[var(--color-primary)] flex items-center justify-center overflow-hidden shrink-0">
-              {user.image ? (
-                <Image
-                  src={user.image}
-                  alt={user.name || "User Avatar"}
-                  width={64}
-                  height={64}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <UserIcon size={32} className="text-[var(--text-secondary)]" />
-              )}
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-2xl font-bold">{user.name || "Candidate"}</h1>
-                <span
-                  className={`text-xs px-2.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${
-                    isAdmin
-                      ? "bg-[var(--color-warning-subtle)] text-[var(--color-warning)] border border-[rgba(255,170,0,0.3)]"
-                      : "bg-[var(--color-primary-subtle)] text-[var(--color-primary)] border border-[rgba(108,92,231,0.3)]"
-                  }`}
-                >
-                  {user.role}
-                </span>
-              </div>
-              <p className="text-sm text-[var(--text-secondary)] mt-0.5">
-                {user.email}
-              </p>
-            </div>
+      <div className="dashboard-body">
+        {/* ─── Page Header ─── */}
+        <div className="dashboard-header">
+          <div>
+            <h1 className="dashboard-title">
+              Welcome back, <span className="text-gradient">{firstName}</span> 👋
+            </h1>
+            <p className="dashboard-subtitle">
+              Track your practice sessions and keep improving your interview skills.
+            </p>
           </div>
-
-          <div className="flex items-center gap-3">
-            <Link href="/" className="btn btn-secondary btn-sm">
-              Home
-            </Link>
-          </div>
+          <Link href="/interview/new" className="btn btn-primary">
+            <Plus size={18} />
+            <span>New Interview</span>
+          </Link>
         </div>
 
-        {/* Quick Actions Grid */}
-        <h2 className="text-lg font-semibold mb-4 text-[var(--text-primary)]">
-          Interview Workspace
-        </h2>
+        {/* ─── Stats Grid ─── */}
+        <StatsGrid
+          stats={[
+            {
+              label: "Total Sessions",
+              value: totalInterviews,
+              icon: BookOpen,
+              color: "primary",
+            },
+            {
+              label: "Completed",
+              value: completedInterviews,
+              icon: CheckCircle2,
+              color: "success",
+            },
+            {
+              label: "In Progress",
+              value: inProgressInterviews,
+              icon: Clock,
+              color: "warning",
+            },
+            {
+              label: "Pending",
+              value: pendingInterviews,
+              icon: ListChecks,
+              color: "muted",
+            },
+          ]}
+        />
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-          {/* Card 1: Practice New Session */}
-          <div className="card p-6 flex flex-col justify-between hover:border-[var(--color-primary)] transition-all">
-            <div>
-              <div className="w-10 h-10 rounded-xl bg-[var(--color-primary-subtle)] text-[var(--color-primary)] flex items-center justify-center mb-4">
-                <Play size={20} />
-              </div>
-              <h3 className="font-semibold text-base mb-1">Start New Interview</h3>
-              <p className="text-xs text-[var(--text-secondary)]">
-                Choose job role, technical topics, and difficulty level to begin an AI session.
-              </p>
-            </div>
-            <button className="btn btn-primary btn-sm mt-6 w-full flex items-center justify-center gap-2">
-              <span>Launch Session</span>
-              <ArrowRight size={14} />
-            </button>
+        {/* ─── Interview History ─── */}
+        <div className="dashboard-section">
+          <div className="section-header">
+            <h2 className="section-title-sm">Interview Sessions</h2>
+            {totalInterviews > 0 && (
+              <span className="badge badge-muted">{totalInterviews} total</span>
+            )}
           </div>
 
-          {/* Card 2: Performance Reports */}
-          <div className="card p-6 flex flex-col justify-between hover:border-[var(--color-primary)] transition-all">
-            <div>
-              <div className="w-10 h-10 rounded-xl bg-[var(--color-success-subtle)] text-[var(--color-success)] flex items-center justify-center mb-4">
-                <FileText size={20} />
-              </div>
-              <h3 className="font-semibold text-base mb-1">My Reports & Analytics</h3>
-              <p className="text-xs text-[var(--text-secondary)]">
-                Review scores, AI critique, strengths, and areas of improvement from previous interviews.
-              </p>
-            </div>
-            <button className="btn btn-secondary btn-sm mt-6 w-full flex items-center justify-center gap-2">
-              <span>View History</span>
-            </button>
-          </div>
-
-          {/* Card 3: Role Capabilities */}
-          <div className="card p-6 flex flex-col justify-between hover:border-[var(--color-primary)] transition-all">
-            <div>
-              <div className="w-10 h-10 rounded-xl bg-[rgba(52,152,219,0.15)] text-[var(--color-info)] flex items-center justify-center mb-4">
-                <Sparkles size={20} />
-              </div>
-              <h3 className="font-semibold text-base mb-1">Role Permissions</h3>
-              <p className="text-xs text-[var(--text-secondary)]">
-                {isAdmin
-                  ? "You have full administrator privileges across candidate sessions and platform analytics."
-                  : "You have candidate privileges to take practice sessions and access your personal feedback."}
-              </p>
-            </div>
-            <div className="mt-6 text-xs text-[var(--text-tertiary)] flex items-center gap-1.5">
-              <Clock size={14} />
-              <span>Session secured via NextAuth JWT</span>
-            </div>
-          </div>
+          {totalInterviews === 0 ? (
+            <EmptyState />
+          ) : (
+            <InterviewList interviews={interviews} />
+          )}
         </div>
-      </main>
+      </div>
     </div>
-  );
-}
-
-export default function DashboardPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)]" />
-        </div>
-      }
-    >
-      <DashboardContent />
-    </Suspense>
   );
 }

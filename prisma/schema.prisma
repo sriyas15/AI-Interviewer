@@ -70,9 +70,9 @@ model User {
   email         String    @unique
   name          String?
   image         String?   // Avatar URL (from OAuth provider)
-  emailVerified DateTime?
   passwordHash  String?   // Null if using OAuth only
   role          Role      @default(CANDIDATE)
+  emailVerified DateTime?
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -85,7 +85,6 @@ model User {
   @@map("users")
 }
 
-/// NextAuth / Auth.js OAuth account link
 model Account {
   id                String  @id @default(cuid())
   userId            String  @map("user_id")
@@ -106,7 +105,6 @@ model Account {
   @@map("accounts")
 }
 
-/// NextAuth / Auth.js Database Session (if database strategy is used)
 model Session {
   id           String   @id @default(cuid())
   sessionToken String   @unique @map("session_token")
@@ -117,10 +115,9 @@ model Session {
   @@map("sessions")
 }
 
-/// NextAuth / Auth.js Verification Token
 model VerificationToken {
   identifier String
-  token      String
+  token      String   @unique
   expires    DateTime
 
   @@unique([identifier, token])

@@ -1,246 +1,184 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
-import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
-import { loginSchema } from "@/lib/validations";
+import { BrainCircuit, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff } from "lucide-react";
+import { GoogleButton } from "@/components/auth/google-button";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+  const urlError = searchParams.get("error");
   const registered = searchParams.get("registered");
-  const authError = searchParams.get("error");
 
-  const [formData, setFormData] = useState({
-    email: "",
-    password: "",
-  });
-
-  const [fieldErrors, setFieldErrors] = useState<{
-    email?: string;
-    password?: string;
-  }>({});
-
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(
-    authError === "OAuthAccountNotLinked"
-      ? "An account with this email already exists with a different sign-in method."
-      : authError === "unauthorized"
-      ? "You do not have administrative permission to view that page."
-      : null
+  const [error, setError] = useState<string | null>(
+    urlError ? "Authentication failed. Please check your credentials." : null
   );
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+  const [isLoading, setIsLoading] = useState(false);
 
-  const validateField = (field: "email" | "password", value: string) => {
-    const testData = { ...formData, [field]: value };
-    const result = loginSchema.safeParse(testData);
+  function validate(): boolean {
+    const errors: { email?: string; password?: string } = {};
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-    if (result.success) {
-      setFieldErrors((prev) => ({ ...prev, [field]: undefined }));
-      return true;
-    } else {
-      const fieldError = result.error.flatten().fieldErrors[field]?.[0];
-      setFieldErrors((prev) => ({ ...prev, [field]: fieldError }));
-      return !fieldError;
+    if (!email.trim()) {
+      errors.email = "Email address is required";
+    } else if (!emailRegex.test(email)) {
+      errors.email = "Please enter a valid email address";
     }
-  };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-    setErrorMessage(null);
-
-    // Clear error dynamically if user fixes it
-    if (fieldErrors[name as keyof typeof fieldErrors]) {
-      validateField(name as "email" | "password", value);
+    if (!password) {
+      errors.password = "Password is required";
     }
-  };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setErrorMessage(null);
+    setError(null);
 
-    // Validate using Zod schema
-    const result = loginSchema.safeParse(formData);
-    if (!result.success) {
-      const errors = result.error.flatten().fieldErrors;
-      setFieldErrors({
-        email: errors.email?.[0],
-        password: errors.password?.[0],
-      });
+    if (!validate()) {
       return;
     }
 
-    setIsSubmitting(true);
+    setIsLoading(true);
 
     try {
-      const response = await signIn("credentials", {
+      const res = await signIn("credentials", {
+        email: email.trim().toLowerCase(),
+        password,
         redirect: false,
-        email: formData.email.trim().toLowerCase(),
-        password: formData.password,
-        callbackUrl,
       });
 
-      if (response?.error) {
-        setErrorMessage("Invalid email or password. Please try again.");
-        setIsSubmitting(false);
-      } else {
-        router.push(callbackUrl);
-        router.refresh();
+      if (!res || res.error) {
+        setError("Invalid email or password.");
+        setIsLoading(false);
+        return;
       }
-    } catch {
-      setErrorMessage("An unexpected authentication error occurred.");
-      setIsSubmitting(false);
+
+      router.push(callbackUrl);
+      router.refresh();
+    } catch (err) {
+      console.error("Login submission error:", err);
+      setError("An unexpected error occurred. Please try again.");
+      setIsLoading(false);
     }
-  };
+  }
 
   return (
-    <div className="card-glass p-8 shadow-2xl border border-[var(--surface-border)] rounded-2xl">
-      {/* Header */}
-      <div className="text-center mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
-          Welcome Back
-        </h1>
-        <p className="text-sm text-[var(--text-secondary)] mt-1.5">
-          Sign in to access your interview practice sessions
-        </p>
+    <div className="card-glass auth-card animate-slide-up">
+      <div className="auth-header">
+        <Link href="/" className="brand-icon" aria-label="Home">
+          <BrainCircuit size={32} />
+        </Link>
+        <h1>Welcome Back</h1>
+        <p>Sign in to your account to continue</p>
       </div>
 
-      {/* Success Notification if redirected after registration */}
       {registered && (
-        <div className="mb-5 p-3 rounded-xl bg-[var(--color-success-subtle)] border border-[rgba(0,214,143,0.3)] flex items-center gap-2.5 text-xs text-[var(--color-success)]">
-          <CheckCircle2 size={16} className="shrink-0" />
-          <span>Account created successfully! You can now log in below.</span>
+        <div className="auth-alert auth-alert-success">
+          <CheckCircle2 size={16} />
+          <span>Account created successfully! Please sign in.</span>
         </div>
       )}
 
-      {/* General Error Banner */}
-      {errorMessage && (
-        <div className="mb-5 p-3 rounded-xl bg-[var(--color-error-subtle)] border border-[rgba(255,71,87,0.3)] flex items-start gap-2.5 text-xs text-[var(--color-error)] animate-shake">
-          <AlertCircle size={16} className="shrink-0 mt-0.5" />
-          <span>{errorMessage}</span>
+      {error && (
+        <div className="auth-alert auth-alert-error">
+          <AlertCircle size={16} />
+          <span>{error}</span>
         </div>
       )}
 
       {/* Google OAuth Button */}
-      <div className="space-y-4">
-        <GoogleSignInButton callbackUrl={callbackUrl} label="Sign in with Google" />
+      <GoogleButton callbackUrl={callbackUrl} />
 
-        <div className="relative flex items-center justify-center my-5">
-          <div className="border-t border-[var(--surface-border)] w-full" />
-          <span className="bg-[var(--surface)] px-3 text-xs uppercase tracking-wider text-[var(--text-tertiary)] absolute">
-            Or continue with email
-          </span>
-        </div>
-
-        {/* Credentials Form */}
-        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-          {/* Email */}
-          <div>
-            <label
-              htmlFor="email"
-              className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5"
-            >
-              Email Address
-            </label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              value={formData.email}
-              onChange={handleChange}
-              onBlur={() => validateField("email", formData.email)}
-              placeholder="name@example.com"
-              className={`input ${
-                fieldErrors.email
-                  ? "border-[var(--color-error)] focus:border-[var(--color-error)] focus:ring-[rgba(255,71,87,0.2)]"
-                  : ""
-              }`}
-              disabled={isSubmitting}
-            />
-            {fieldErrors.email && (
-              <p className="mt-1 text-xs text-[var(--color-error)] flex items-center gap-1">
-                <span>{fieldErrors.email}</span>
-              </p>
-            )}
-          </div>
-
-          {/* Password with Eye Toggle */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label
-                htmlFor="password"
-                className="block text-xs font-medium text-[var(--text-secondary)]"
-              >
-                Password
-              </label>
-            </div>
-            <div className="relative">
-              <input
-                id="password"
-                name="password"
-                type={showPassword ? "text" : "password"}
-                autoComplete="current-password"
-                value={formData.password}
-                onChange={handleChange}
-                onBlur={() => validateField("password", formData.password)}
-                placeholder="Enter your password"
-                className={`input pr-10 ${
-                  fieldErrors.password
-                    ? "border-[var(--color-error)] focus:border-[var(--color-error)] focus:ring-[rgba(255,71,87,0.2)]"
-                    : ""
-                }`}
-                disabled={isSubmitting}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                tabIndex={-1}
-                aria-label={showPassword ? "Hide password" : "Show password"}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-            {fieldErrors.password && (
-              <p className="mt-1 text-xs text-[var(--color-error)] flex items-center gap-1">
-                <span>{fieldErrors.password}</span>
-              </p>
-            )}
-          </div>
-
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="btn btn-primary w-full py-2.5 mt-2 font-medium flex items-center justify-center gap-2"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                <span>Signing in...</span>
-              </>
-            ) : (
-              <span>Sign In</span>
-            )}
-          </button>
-        </form>
+      <div className="auth-divider">
+        <span>or continue with email</span>
       </div>
 
-      {/* Switch to Register */}
-      <div className="mt-6 text-center text-xs text-[var(--text-secondary)]">
-        Don&apos;t have an account?{" "}
-        <Link
-          href={`/register${callbackUrl !== "/dashboard" ? `?callbackUrl=${encodeURIComponent(callbackUrl)}` : ""}`}
-          className="text-[var(--color-primary)] font-medium hover:underline"
+      {/* Email / Password Form */}
+      <form onSubmit={handleSubmit} noValidate>
+        <div className="form-group">
+          <label className="form-label" htmlFor="email">
+            Email Address
+          </label>
+          <input
+            id="email"
+            type="email"
+            required
+            autoComplete="email"
+            placeholder="you@example.com"
+            className="input"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: undefined }));
+            }}
+            disabled={isLoading}
+          />
+          {fieldErrors.email && <p className="form-error">{fieldErrors.email}</p>}
+        </div>
+
+        <div className="form-group">
+          <label className="form-label" htmlFor="password">
+            Password
+          </label>
+          <div className="password-input-wrapper">
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              required
+              autoComplete="current-password"
+              placeholder="••••••••"
+              className="input"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: undefined }));
+              }}
+              disabled={isLoading}
+            />
+            <button
+              type="button"
+              className="password-toggle-btn"
+              onClick={() => setShowPassword((prev) => !prev)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          {fieldErrors.password && <p className="form-error">{fieldErrors.password}</p>}
+        </div>
+
+        <button
+          type="submit"
+          className="btn btn-primary"
+          style={{ width: "100%", marginTop: "0.5rem" }}
+          disabled={isLoading}
         >
-          Sign up now
-        </Link>
+          {isLoading ? (
+            <>
+              <Loader2 className="animate-spin" size={16} />
+              <span>Signing In...</span>
+            </>
+          ) : (
+            "Sign In"
+          )}
+        </button>
+      </form>
+
+      <div className="auth-footer">
+        Don&apos;t have an account?{" "}
+        <Link href="/register">Create an account</Link>
       </div>
     </div>
   );
@@ -250,8 +188,8 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="card-glass p-8 flex items-center justify-center min-h-[350px]">
-          <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)]" />
+        <div className="card-glass auth-card text-center py-12">
+          <Loader2 className="animate-spin mx-auto text-primary" size={24} />
         </div>
       }
     >
@@ -259,4 +197,3 @@ export default function LoginPage() {
     </Suspense>
   );
 }
-

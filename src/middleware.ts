@@ -1,18 +1,34 @@
-import NextAuth from "next-auth";
-import { authConfig } from "@/auth.config";
+import { auth } from "@/auth";
+import { NextResponse } from "next/server";
 
-const { auth } = NextAuth(authConfig);
-export default auth;
+export default auth((req) => {
+  const isLoggedIn = !!req.auth;
+  const { pathname } = req.nextUrl;
+
+  const isAuthRoute =
+    pathname.startsWith("/login") || pathname.startsWith("/register");
+  const isProtectedRoute =
+    pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/interview") ||
+    pathname.startsWith("/reports");
+
+  // Redirect authenticated users away from /login and /register
+  if (isAuthRoute && isLoggedIn) {
+    return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
+  }
+
+  // Redirect unauthenticated users to /login when visiting protected pages
+  if (isProtectedRoute && !isLoggedIn) {
+    const callbackUrl = encodeURIComponent(pathname);
+    return NextResponse.redirect(
+      new URL(`/login?callbackUrl=${callbackUrl}`, req.nextUrl)
+    );
+  }
+
+  return NextResponse.next();
+});
 
 export const config = {
-  matcher: [
-    /*
-     * Match all request paths except:
-     * - api routes (e.g. /api/auth/*)
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico, images, svg, icons
-     */
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
-  ],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
+
