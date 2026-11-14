@@ -5,6 +5,11 @@ import { db } from "@/lib/db";
 import { createInterviewSchema } from "@/lib/validations";
 import { redirect } from "next/navigation";
 import type { CreateInterviewInput } from "@/lib/validations";
+import {
+  generateInterviewQuestion,
+  evaluateCandidateAnswer,
+  generateFinalInterviewReport,
+} from "@/lib/ai/service";
 
 export interface CreateInterviewResult {
   success: boolean;
@@ -87,5 +92,319 @@ export async function startInterviewSession(
     return { success: false, error: "Failed to initialize interview. Please try again." };
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Get or Generate Active Question
+// ─────────────────────────────────────────────────────────────
+
+export async function getOrGenerateNextQuestion(interviewId: string) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    const interview = await db.interview.findUnique({
+      where: { id: interviewId },
+      include: {
+        questions: {
+          orderBy: { orderIndex: "asc" },
+          include: {
+            response: {
+              include: {
+                evaluation: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!interview || interview.userId !== session.user.id) {
+      return { success: false, error: "Interview not found or unauthorized" };
+    }
+
+    const existingQuestions = interview.questions;
+
+    // Check if there is an existing unanswered question
+    const unansweredQuestion = existingQuestions.find((q) => !q.response);
+    if (unansweredQuestion) {
+      return {
+        success: true,
+        question: unansweredQuestion,
+        totalQuestions: Math.max(5, existingQuestions.length),
+        isCompleted: false,
+      };
+    }
+
+    const MAX_QUESTIONS = 5;
+
+    // If we already answered all 5 questions, the interview is completed
+    if (existingQuestions.length >= MAX_QUESTIONS) {
+      return {
+        success: true,
+        isCompleted: true,
+      };
+    }
+
+    // Generate the next question
+    const nextOrderIndex = existingQuestions.length + 1;
+    const generated = await generateInterviewQuestion({
+      jobRole: interview.jobRole,
+      difficulty: interview.difficulty,
+      topics: interview.topics,
+      orderIndex: nextOrderIndex,
+      previousQuestions: existingQuestions.map((q) => ({
+        content: q.content,
+        response: q.response?.content,
+      })),
+    });
+
+    // Save question in database
+    const newQuestion = await db.question.create({
+      data: {
+        interviewId: interview.id,
+        orderIndex: nextOrderIndex,
+        type: generated.type,
+        content: generated.content,
+        context: generated.context || null,
+        expectedTopics: generated.expectedTopics,
+      },
+      include: {
+        response: true,
+      },
+    });
+
+    return {
+      success: true,
+      question: newQuestion,
+      totalQuestions: MAX_QUESTIONS,
+      isCompleted: false,
+    };
+  } catch (error) {
+    console.error("Error in getOrGenerateNextQuestion:", error);
+    return { success: false, error: "Failed to retrieve next question" };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Submit Candidate Answer & Trigger Evaluation
+// ─────────────────────────────────────────────────────────────
+
+interface SubmitAnswerInput {
+  interviewId: string;
+  questionId: string;
+  content: string;
+  code?: string | null;
+  language?: string | null;
+  durationMs?: number | null;
+}
+
+export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    const { interviewId, questionId, content, code, language, durationMs } = input;
+
+    // Security check: verify ownership
+    const interview = await db.interview.findUnique({
+      where: { id: interviewId },
+      include: {
+        questions: {
+          orderBy: { orderIndex: "asc" },
+          include: {
+            response: {
+              include: {
+                evaluation: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!interview || interview.userId !== session.user.id) {
+      return { success: false, error: "Interview not found or unauthorized" };
+    }
+
+    const targetQuestion = interview.questions.find((q) => q.id === questionId);
+    if (!targetQuestion) {
+      return { success: false, error: "Question not found in this interview" };
+    }
+
+    // 1. Evaluate with AI
+    const evaluationResult = await evaluateCandidateAnswer({
+      question: {
+        content: targetQuestion.content,
+        type: targetQuestion.type,
+        expectedTopics: targetQuestion.expectedTopics,
+      },
+      responseContent: content,
+      code,
+      jobRole: interview.jobRole,
+      difficulty: interview.difficulty,
+    });
+
+    // 2. Persist Response and Evaluation
+    const savedResponse = await db.response.create({
+      data: {
+        questionId: targetQuestion.id,
+        content: content.trim() || "(No verbal answer provided)",
+        code: code || null,
+        language: language || null,
+        durationMs: durationMs || null,
+        evaluation: {
+          create: {
+            score: evaluationResult.score,
+            feedback: evaluationResult.feedback,
+            strengths: evaluationResult.strengths,
+            weaknesses: evaluationResult.weaknesses,
+            followUpAsked: evaluationResult.shouldFollowUp,
+          },
+        },
+      },
+      include: {
+        evaluation: true,
+      },
+    });
+
+    // 3. Check if all questions are now answered
+    const MAX_QUESTIONS = 5;
+    const answeredCount = interview.questions.filter((q) => q.response || q.id === questionId).length;
+    const isSessionFinished = answeredCount >= MAX_QUESTIONS;
+
+    if (isSessionFinished) {
+      // Re-fetch all questions and responses to compile comprehensive report
+      const allQuestions = await db.question.findMany({
+        where: { interviewId },
+        orderBy: { orderIndex: "asc" },
+        include: {
+          response: {
+            include: {
+              evaluation: true,
+            },
+          },
+        },
+      });
+
+      // Generate Final Report with AI
+      const finalReport = await generateFinalInterviewReport({
+        interview: {
+          jobRole: interview.jobRole,
+          difficulty: interview.difficulty,
+          topics: interview.topics,
+        },
+        questionsWithResponses: allQuestions.map((q) => ({
+          content: q.content,
+          type: q.type,
+          response: q.response
+            ? {
+                content: q.response.content,
+                code: q.response.code,
+                evaluation: q.response.evaluation
+                  ? {
+                      score: q.response.evaluation.score,
+                      feedback: q.response.evaluation.feedback,
+                      strengths: q.response.evaluation.strengths,
+                      weaknesses: q.response.evaluation.weaknesses,
+                    }
+                  : null,
+              }
+            : null,
+        })),
+      });
+
+      // Save Report and mark interview COMPLETED
+      await db.$transaction([
+        db.report.create({
+          data: {
+            interviewId: interview.id,
+            overallScore: finalReport.overallScore,
+            summary: finalReport.summary,
+            technicalScore: finalReport.technicalScore,
+            communicationScore: finalReport.communicationScore,
+            problemSolvingScore: finalReport.problemSolvingScore,
+            codeQualityScore: finalReport.codeQualityScore ?? null,
+            strengths: finalReport.strengths,
+            weaknesses: finalReport.weaknesses,
+            recommendations: finalReport.recommendations,
+            detailedFeedback: finalReport as unknown as object,
+          },
+        }),
+        db.interview.update({
+          where: { id: interview.id },
+          data: {
+            status: "COMPLETED",
+            completedAt: new Date(),
+            totalScore: finalReport.overallScore,
+          },
+        }),
+      ]);
+
+      return {
+        success: true,
+        evaluation: evaluationResult,
+        isCompleted: true,
+      };
+    }
+
+    return {
+      success: true,
+      evaluation: evaluationResult,
+      isCompleted: false,
+    };
+  } catch (error) {
+    console.error("Error in submitAnswerAndEvaluate:", error);
+    return { success: false, error: "Failed to evaluate answer and submit" };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Anti-Cheat / Activity Monitoring Logger
+// ─────────────────────────────────────────────────────────────
+
+interface LogActivityInput {
+  interviewId: string;
+  type: "TAB_SWITCH" | "COPY" | "PASTE" | "FULLSCREEN_EXIT" | "WINDOW_BLUR" | "SUSPICIOUS_TYPING";
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function logActivityEvent(input: LogActivityInput) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) return { success: false };
+
+    const { interviewId, type, description, metadata } = input;
+
+    // Verify interview ownership
+    const interview = await db.interview.findUnique({
+      where: { id: interviewId },
+      select: { userId: true },
+    });
+
+    if (!interview || interview.userId !== session.user.id) {
+      return { success: false };
+    }
+
+    await db.activityEvent.create({
+      data: {
+        interviewId,
+        type,
+        description: description || `Candidate triggered ${type}`,
+        metadata: metadata ? (metadata as object) : undefined,
+      },
+    });
+
+    return { success: true };
+  } catch (e) {
+    console.warn("Failed to log activity event:", e);
+    return { success: false };
+  }
+}
+
 
 

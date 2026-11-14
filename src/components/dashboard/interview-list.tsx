@@ -73,7 +73,7 @@ export function InterviewList({ interviews }: InterviewListProps) {
                 ? `/interview/${interview.id}/start`
                 : interview.status === "IN_PROGRESS"
                   ? `/interview/${interview.id}`
-                  : `/interview/${interview.id}/summary`
+                  : `/interview/${interview.id}/report`
             }
             className="interview-card card"
           >
