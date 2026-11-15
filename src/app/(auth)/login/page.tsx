@@ -7,10 +7,19 @@ import { signIn } from "next-auth/react";
 import { BrainCircuit, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff } from "lucide-react";
 import { GoogleButton } from "@/components/auth/google-button";
 
+function getSafeCallbackUrl(url: string | null): string {
+  if (!url) return "/dashboard";
+  // Prevent open redirect: must be a local relative path starting with '/', not '//' or '/\'
+  if (url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\")) {
+    return url;
+  }
+  return "/dashboard";
+}
+
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+  const callbackUrl = getSafeCallbackUrl(searchParams.get("callbackUrl"));
   const urlError = searchParams.get("error");
   const registered = searchParams.get("registered");
 
