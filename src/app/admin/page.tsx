@@ -6,10 +6,11 @@ import { Role } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   Shield,
-  ArrowLeft,
+  Eye,
+  BrainCircuit,
   Loader2,
 } from "lucide-react";
-import { SignOutButton } from "@/components/auth/sign-out-button";
+import { ProfileDropdown } from "@/components/auth/profile-dropdown";
 import { AdminPortal } from "@/components/admin/admin-portal";
 
 export const instant = false;
@@ -22,8 +23,8 @@ async function AdminContent() {
     redirect("/dashboard?error=unauthorized");
   }
 
-  // Fetch candidates and interview sessions
-  const [candidates, interviews] = await Promise.all([
+  // Fetch all recruiter data in parallel
+  const [candidates, interviews, templates, bankQuestions, invitations, allUsers] = await Promise.all([
     db.user.findMany({
       where: { role: Role.CANDIDATE },
       orderBy: { createdAt: "desc" },
@@ -32,6 +33,7 @@ async function AdminContent() {
         name: true,
         email: true,
         image: true,
+        isActive: true,
         emailVerified: true,
         createdAt: true,
         interviews: {
@@ -39,6 +41,7 @@ async function AdminContent() {
             id: true,
             status: true,
             totalScore: true,
+            humanDecision: true,
             createdAt: true,
           },
           orderBy: { createdAt: "desc" },
@@ -55,6 +58,12 @@ async function AdminContent() {
         topics: true,
         status: true,
         totalScore: true,
+        humanDecision: true,
+        humanScore: true,
+        humanNotes: true,
+        durationSeconds: true,
+        tokenCount: true,
+        estimatedCost: true,
         createdAt: true,
         completedAt: true,
         user: {
@@ -65,9 +74,20 @@ async function AdminContent() {
             image: true,
           },
         },
+        template: {
+          select: {
+            id: true,
+            title: true,
+          },
+        },
         report: {
           select: {
             overallScore: true,
+            technicalScore: true,
+            communicationScore: true,
+            problemSolvingScore: true,
+            modelName: true,
+            promptVersion: true,
           },
         },
         _count: {
@@ -78,53 +98,189 @@ async function AdminContent() {
         },
       },
     }),
+    db.interviewTemplate.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        createdBy: {
+          select: { name: true, email: true },
+        },
+        _count: {
+          select: { interviews: true, invitations: true },
+        },
+      },
+    }),
+    db.bankQuestion.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        createdBy: {
+          select: { name: true, email: true },
+        },
+      },
+    }),
+    db.interviewInvitation.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        template: { select: { title: true } },
+        invitedBy: { select: { name: true, email: true } },
+      },
+    }),
+    db.user.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        _count: { select: { interviews: true } },
+      },
+    }),
   ]);
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      {/* Ambient background */}
+    <div className="dashboard-page">
+      {/* Ambient background glow */}
       <div className="ambient-bg" aria-hidden="true">
         <div className="ambient-orb ambient-orb-1" />
         <div className="ambient-orb ambient-orb-3" />
       </div>
 
-      {/* Navigation */}
-      <nav className="nav border-b border-[var(--surface-border)]">
-        <div className="nav-inner max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/dashboard"
-              className="btn btn-ghost btn-sm flex items-center gap-1.5 text-xs text-[var(--text-secondary)]"
-            >
-              <ArrowLeft size={14} />
-              <span>Back to Candidate Dashboard</span>
+      {/* Top Nav aligned with Dashboard */}
+      <nav className="dashboard-nav">
+        <div className="dashboard-nav-inner">
+          <div style={{ display: "flex", alignItems: "center", gap: "0.875rem" }}>
+            <Link href="/" className="nav-brand">
+              <BrainCircuit size={24} strokeWidth={1.5} />
+              <span>AI Interviewer</span>
             </Link>
-            <div className="h-4 w-px bg-[var(--surface-border)]" />
-            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-warning)]">
-              <Shield size={16} />
-              <span>Admin Management Portal</span>
+            <div
+              style={{
+                width: "1px",
+                height: "18px",
+                backgroundColor: "var(--surface-border)",
+              }}
+            />
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.375rem",
+                padding: "0.25rem 0.625rem",
+                borderRadius: "9999px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                backgroundColor: "rgba(245, 158, 11, 0.12)",
+                color: "#f59e0b",
+                border: "1px solid rgba(245, 158, 11, 0.25)",
+              }}
+            >
+              <Shield size={13} />
+              <span>Admin Workspace</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-[var(--text-secondary)] hidden sm:inline">
-              Logged in as <strong className="text-[var(--text-primary)]">{user.email}</strong>
-            </span>
-            <SignOutButton />
+          <div className="dashboard-nav-right">
+            <Link
+              href="/dashboard?view=candidate"
+              className="btn btn-secondary btn-sm"
+              style={{
+                fontSize: "0.75rem",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.375rem",
+              }}
+              title="Preview candidate dashboard experience"
+            >
+              <Eye size={14} />
+              <span>Preview Candidate View</span>
+            </Link>
+
+            <ProfileDropdown
+              user={{
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                image: user.image,
+                role: user.role,
+              }}
+              showDashboardLink={false}
+            />
           </div>
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-6 py-8 relative z-10">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight">Recruiter &amp; Admin Workspace</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">
-            Access the complete candidate roster, audit interview submissions, examine proctoring activity, and inspect AI evaluation reports.
-          </p>
+      {/* Main Content Area */}
+      <main className="dashboard-body" style={{ position: "relative", zIndex: 10 }}>
+        {/* Header */}
+        <div className="dashboard-header">
+          <div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                marginBottom: "0.5rem",
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.375rem",
+                  fontSize: "0.7rem",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  color: "#f59e0b",
+                  backgroundColor: "rgba(245, 158, 11, 0.1)",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  border: "1px solid rgba(245, 158, 11, 0.25)",
+                }}
+              >
+                Executive Portal
+              </span>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.375rem",
+                  fontSize: "0.75rem",
+                  color: "var(--color-success)",
+                  fontWeight: 500,
+                }}
+              >
+                <span
+                  style={{
+                    width: "7px",
+                    height: "7px",
+                    borderRadius: "50%",
+                    backgroundColor: "var(--color-success)",
+                    boxShadow: "0 0 8px var(--color-success)",
+                  }}
+                />
+                Live Candidate Sync
+              </span>
+            </div>
+            <h1 className="dashboard-title">
+              Recruiter &amp; Admin <span className="text-gradient">Workspace</span>
+            </h1>
+            <p className="dashboard-subtitle">
+              Audit candidate rosters, examine question-by-question evaluations and written code, and review proctoring telemetry.
+            </p>
+          </div>
         </div>
 
-        {/* Interactive Candidate Roster & Interviews Portal */}
-        <AdminPortal candidates={candidates} interviews={interviews} />
+        {/* Interactive Candidate Roster, Templates, Question Bank, Pipeline & Team Portal */}
+        <AdminPortal
+          candidates={candidates}
+          interviews={interviews}
+          templates={templates}
+          bankQuestions={bankQuestions}
+          invitations={invitations}
+          allUsers={allUsers}
+        />
       </main>
     </div>
   );
@@ -134,8 +290,21 @@ export default function AdminPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)]" />
+        <div
+          className="dashboard-page"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minHeight: "100vh",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem" }}>
+            <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)]" />
+            <span style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+              Loading Admin Intelligence Workspace...
+            </span>
+          </div>
         </div>
       }
     >

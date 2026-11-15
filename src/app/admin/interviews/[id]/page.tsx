@@ -16,8 +16,11 @@ import {
   Code2,
   Layers,
   Calendar,
+  Sparkles,
+  Printer,
 } from "lucide-react";
-import { SignOutButton } from "@/components/auth/sign-out-button";
+import { ProfileDropdown } from "@/components/auth/profile-dropdown";
+import { RecruiterDecisionCard } from "@/components/admin/recruiter-decision-card";
 
 export const instant = false;
 
@@ -59,6 +62,14 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
       activities: {
         orderBy: { timestamp: "asc" },
       },
+      auditLogs: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          admin: {
+            select: { name: true, email: true },
+          },
+        },
+      },
     },
   });
 
@@ -70,47 +81,77 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
   const flaggedEvents = interview.activities;
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className="dashboard-page">
       {/* Ambient background */}
       <div className="ambient-bg" aria-hidden="true">
         <div className="ambient-orb ambient-orb-1" />
         <div className="ambient-orb ambient-orb-3" />
       </div>
 
-      {/* Navigation */}
-      <nav className="nav border-b border-[var(--surface-border)] sticky top-0 z-50 bg-[var(--bg-primary)]/80 backdrop-blur-md">
-        <div className="nav-inner max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      {/* Top Nav aligned with Dashboard */}
+      <nav className="dashboard-nav">
+        <div className="dashboard-nav-inner">
+          <div style={{ display: "flex", alignItems: "center", gap: "0.875rem" }}>
             <Link
               href="/admin"
-              className="btn btn-ghost btn-sm flex items-center gap-1.5 text-xs text-[var(--text-secondary)]"
+              className="btn btn-ghost btn-sm"
+              style={{ fontSize: "0.75rem", display: "inline-flex", alignItems: "center", gap: "0.375rem" }}
             >
               <ArrowLeft size={14} />
-              <span>Back to Admin Portal</span>
+              <span>Back to Admin Workspace</span>
             </Link>
-            <div className="h-4 w-px bg-[var(--surface-border)]" />
-            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-warning)]">
-              <Shield size={16} />
+            <div
+              style={{
+                width: "1px",
+                height: "18px",
+                backgroundColor: "var(--surface-border)",
+              }}
+            />
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.375rem",
+                padding: "0.25rem 0.625rem",
+                borderRadius: "9999px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                backgroundColor: "rgba(245, 158, 11, 0.12)",
+                color: "#f59e0b",
+                border: "1px solid rgba(245, 158, 11, 0.25)",
+              }}
+            >
+              <Shield size={13} />
               <span>Interview Deep Dive</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="dashboard-nav-right">
             <Link
               href={`/interview/${interview.id}/report`}
-              className="btn btn-primary btn-sm flex items-center gap-1.5 text-xs"
+              className="btn btn-secondary btn-sm"
+              style={{ fontSize: "0.75rem", display: "inline-flex", alignItems: "center", gap: "0.375rem" }}
             >
               <FileBarChart size={14} />
-              <span>View Full AI Report</span>
+              <span>View Candidate Report</span>
             </Link>
-            <SignOutButton />
+            <ProfileDropdown
+              user={{
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                image: user.image,
+                role: user.role,
+              }}
+              showDashboardLink={false}
+            />
           </div>
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-6 py-8 relative z-10 flex flex-col gap-8">
+      <main className="dashboard-body" style={{ position: "relative", zIndex: 10, gap: "2rem" }}>
         {/* ─── Candidate & Session Header Card ─── */}
-        <div className="card p-6 border border-[var(--surface-border)]">
+        <div className="card card-glass" style={{ padding: "1.5rem" }}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               {interview.user.image ? (
@@ -129,6 +170,19 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-xl font-bold">{interview.user.name || "Candidate"}</h1>
                   <span className="badge badge-muted text-[10px]">Candidate</span>
+                  {interview.humanDecision !== "UNDECIDED" && (
+                    <span
+                      className={`badge ${
+                        interview.humanDecision === "ADVANCE"
+                          ? "badge-success"
+                          : interview.humanDecision === "HOLD"
+                          ? "badge-warning"
+                          : "badge-error"
+                      }`}
+                    >
+                      Decision: {interview.humanDecision}
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-[var(--text-secondary)] mt-0.5">{interview.user.email}</p>
                 <div className="flex items-center gap-3 mt-2 text-xs text-[var(--text-tertiary)] flex-wrap">
@@ -171,88 +225,68 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
                 {interview.status}
               </span>
 
-              {typeof interview.totalScore === "number" && (
+              {typeof (interview.humanScore ?? interview.totalScore) === "number" && (
                 <div className="bg-[var(--surface-hover)] border border-[var(--surface-border)] px-4 py-2 rounded-lg text-center">
                   <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] font-semibold">
-                    Overall Score
+                    {interview.humanScore !== null ? "Overridden Score" : "AI Score"}
                   </div>
                   <div
                     className="text-2xl font-black"
                     style={{
                       color:
-                        interview.totalScore >= 75
+                        (interview.humanScore ?? interview.totalScore!) >= 75
                           ? "var(--color-success)"
-                          : interview.totalScore >= 50
+                          : (interview.humanScore ?? interview.totalScore!) >= 50
                           ? "var(--color-warning)"
                           : "var(--color-error)",
                     }}
                   >
-                    {interview.totalScore}%
+                    {interview.humanScore ?? interview.totalScore}%
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Topics Chips */}
-          <div className="mt-5 pt-4 border-t border-[var(--surface-border)] flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-[var(--text-tertiary)] flex items-center gap-1 font-medium">
-              <Layers size={13} /> Tested Topics:
-            </span>
-            {interview.topics.map((t) => (
-              <span key={t} className="topic-chip text-xs">
-                {t}
+          {/* Topics Chips & Version Stamp (A10) */}
+          <div className="mt-5 pt-4 border-t border-[var(--surface-border)] flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-[var(--text-tertiary)] flex items-center gap-1 font-medium">
+                <Layers size={13} /> Tested Topics:
               </span>
-            ))}
+              {interview.topics.map((t) => (
+                <span key={t} className="topic-chip text-xs">
+                  {t}
+                </span>
+              ))}
+            </div>
+
+            {/* Version Stamping (A10) */}
+            <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
+              <Sparkles size={12} className="text-[var(--color-primary)]" />
+              <span>
+                Model: <strong>{interview.report?.modelName || "gpt-4o"}</strong> • Prompt: <strong>{interview.report?.promptVersion || "v2.1"}</strong>
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* ─── Report Score Summary (if generated) ─── */}
-        {interview.report && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div className="card p-4 border border-[var(--surface-border)] text-center">
-              <span className="text-[11px] text-[var(--text-tertiary)] uppercase font-semibold">
-                Technical Depth
-              </span>
-              <div className="text-2xl font-bold mt-1 text-[var(--color-primary-light)]">
-                {interview.report.technicalScore}%
-              </div>
-            </div>
-            <div className="card p-4 border border-[var(--surface-border)] text-center">
-              <span className="text-[11px] text-[var(--text-tertiary)] uppercase font-semibold">
-                Communication
-              </span>
-              <div className="text-2xl font-bold mt-1 text-[var(--color-info)]">
-                {interview.report.communicationScore}%
-              </div>
-            </div>
-            <div className="card p-4 border border-[var(--surface-border)] text-center">
-              <span className="text-[11px] text-[var(--text-tertiary)] uppercase font-semibold">
-                Problem Solving
-              </span>
-              <div className="text-2xl font-bold mt-1 text-[var(--color-success)]">
-                {interview.report.problemSolvingScore}%
-              </div>
-            </div>
-            <div className="card p-4 border border-[var(--surface-border)] text-center">
-              <span className="text-[11px] text-[var(--text-tertiary)] uppercase font-semibold">
-                Code Quality
-              </span>
-              <div className="text-2xl font-bold mt-1 text-[var(--color-warning)]">
-                {interview.report.codeQualityScore !== null
-                  ? `${interview.report.codeQualityScore}%`
-                  : "N/A"}
-              </div>
-            </div>
-          </div>
-        )}
+        {/* ─── Human Recruiter Override Control Card (A6) ─── */}
+        <RecruiterDecisionCard
+          interviewId={interview.id}
+          currentDecision={interview.humanDecision}
+          currentScore={interview.humanScore}
+          currentNotes={interview.humanNotes}
+          originalAiScore={interview.totalScore}
+          auditLogs={interview.auditLogs}
+        />
 
-        {/* ─── Question-by-Question Deep Dive ─── */}
+        {/* ─── Question-by-Question Deep Dive (A5) ─── */}
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold flex items-center gap-2">
               <BrainCircuit size={20} className="text-[var(--color-primary)]" />
-              <span>Question-by-Question Transcript &amp; Evaluation</span>
+              <span>Question-by-Question Transcript &amp; Evaluation (A5)</span>
             </h2>
             <span className="text-xs text-[var(--text-tertiary)]">
               {answeredQuestions.length} of {interview.questions.length} answered
@@ -297,7 +331,7 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
                                   : "var(--color-error)",
                             }}
                           >
-                            {evalData.score.toFixed(1)} / 10
+                            {evalData.score} / 10
                           </span>
                         </div>
                       ) : (
@@ -307,120 +341,124 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
 
                     {/* Question Content */}
                     <div>
-                      <h3 className="text-sm font-semibold text-[var(--text-primary)] leading-relaxed">
+                      <h3 className="font-semibold text-sm text-[var(--text-primary)]">
                         {q.content}
                       </h3>
-                      {q.expectedTopics.length > 0 && (
-                        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                          <span className="text-[11px] text-[var(--text-tertiary)] font-medium">
-                            Expected:
-                          </span>
-                          {q.expectedTopics.map((t) => (
-                            <span
-                              key={t}
-                              className="text-[10px] bg-[var(--bg-secondary)] border border-[var(--surface-border)] px-2 py-0.5 rounded text-[var(--text-secondary)]"
-                            >
-                              {t}
-                            </span>
-                          ))}
-                        </div>
+                      {q.context && (
+                        <p className="text-xs text-[var(--text-secondary)] mt-1 bg-[var(--surface-hover)] p-2 rounded border border-[var(--surface-border)] font-mono">
+                          {q.context}
+                        </p>
                       )}
                     </div>
 
-                    {/* Candidate's Submitted Answer */}
-                    {q.response ? (
-                      <div className="bg-[var(--bg-secondary)] border border-[var(--surface-border)] rounded-lg p-4 flex flex-col gap-3">
-                        <div className="flex items-center justify-between text-xs font-medium text-[var(--text-secondary)]">
-                          <span>Candidate Answer:</span>
+                    {/* Expected Topics */}
+                    {q.expectedTopics.length > 0 && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[11px] text-[var(--text-tertiary)]">
+                          Expected topics:
+                        </span>
+                        {q.expectedTopics.map((topic) => (
+                          <span
+                            key={topic}
+                            className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--surface-hover)] text-[var(--text-secondary)] border border-[var(--surface-border)]"
+                          >
+                            {topic}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Candidate Answer Transcript */}
+                    {q.response && (
+                      <div className="bg-[var(--surface-hover)] border border-[var(--surface-border)] rounded-lg p-4 flex flex-col gap-3">
+                        <div className="flex items-center justify-between text-xs text-[var(--text-tertiary)]">
+                          <span className="font-semibold text-[var(--text-secondary)]">
+                            Candidate Answer Transcript:
+                          </span>
                           {q.response.durationMs && (
-                            <span className="flex items-center gap-1 text-[var(--text-tertiary)]">
-                              <Clock size={12} />
-                              {Math.round(q.response.durationMs / 1000)}s
+                            <span className="flex items-center gap-1 font-mono text-[11px]">
+                              <Clock size={11} />
+                              {Math.round(q.response.durationMs / 1000)}s speaking time
                             </span>
                           )}
                         </div>
 
                         <p className="text-xs text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap">
-                          {q.response.content || "No verbal response provided."}
+                          {q.response.content || "(No verbal transcript recorded)"}
                         </p>
 
-                        {/* Submitted Code Block if present */}
+                        {/* Code snippet if coding question */}
                         {q.response.code && (
                           <div className="mt-2">
-                            <div className="text-[11px] font-mono text-[var(--text-tertiary)] mb-1 flex items-center gap-1">
-                              <Code2 size={12} />
-                              <span>Code Submission ({q.response.language || "code"}):</span>
+                            <div className="flex items-center justify-between text-[11px] text-[var(--text-tertiary)] mb-1 font-mono">
+                              <span className="flex items-center gap-1">
+                                <Code2 size={12} />
+                                Submitted Code ({q.response.language || "javascript"}):
+                              </span>
                             </div>
-                            <pre className="p-3 bg-[var(--bg-primary)] border border-[var(--surface-border)] rounded-md font-mono text-xs overflow-x-auto text-[var(--text-primary)]">
+                            <pre className="bg-[var(--bg-primary)] border border-[var(--surface-border)] p-3 rounded text-xs font-mono overflow-x-auto text-[var(--text-primary)]">
                               <code>{q.response.code}</code>
                             </pre>
                           </div>
                         )}
                       </div>
-                    ) : (
-                      <div className="text-xs text-[var(--text-tertiary)] italic p-3 bg-[var(--bg-secondary)]/50 rounded-md">
-                        Candidate skipped or has not yet responded to this question.
-                      </div>
                     )}
 
-                    {/* AI Evaluation Breakdown */}
+                    {/* Rubric Evaluation with Evidence Traceability (A5) */}
                     {evalData && (
-                      <div className="bg-[var(--surface-hover)] border border-[var(--surface-border)] rounded-lg p-4 flex flex-col gap-3">
-                        <div className="text-xs font-semibold text-[var(--color-primary-light)] uppercase tracking-wider">
-                          AI Assessment &amp; Feedback
+                      <div className="border border-[var(--surface-border)] rounded-lg p-4 flex flex-col gap-3 bg-[var(--bg-secondary)]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-[var(--color-primary-light)]">
+                            AI Evaluation &amp; Rubric Feedback:
+                          </span>
                         </div>
+
                         <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
                           {evalData.feedback}
                         </p>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
+                          {/* Strengths */}
                           {evalData.strengths.length > 0 && (
-                            <div>
-                              <span className="text-[11px] font-semibold text-[var(--color-success)] flex items-center gap-1 mb-1">
-                                <CheckCircle2 size={12} /> Strengths
+                            <div className="flex flex-col gap-1.5">
+                              <span className="text-[11px] font-semibold text-[var(--color-success)] flex items-center gap-1">
+                                <CheckCircle2 size={12} /> Strengths Demonstrated:
                               </span>
-                              <ul className="text-xs text-[var(--text-secondary)] list-disc list-inside space-y-0.5">
-                                {evalData.strengths.map((s, i) => (
-                                  <li key={i}>{s}</li>
+                              <ul className="list-disc list-inside text-xs text-[var(--text-secondary)] flex flex-col gap-0.5">
+                                {evalData.strengths.map((str, sIdx) => (
+                                  <li key={sIdx}>{str}</li>
                                 ))}
                               </ul>
                             </div>
                           )}
 
+                          {/* Weaknesses */}
                           {evalData.weaknesses.length > 0 && (
-                            <div>
-                              <span className="text-[11px] font-semibold text-[var(--color-warning)] flex items-center gap-1 mb-1">
-                                <AlertTriangle size={12} /> Areas for Improvement
+                            <div className="flex flex-col gap-1.5">
+                              <span className="text-[11px] font-semibold text-[var(--color-error)] flex items-center gap-1">
+                                <AlertTriangle size={12} /> Improvement Areas:
                               </span>
-                              <ul className="text-xs text-[var(--text-secondary)] list-disc list-inside space-y-0.5">
-                                {evalData.weaknesses.map((w, i) => (
-                                  <li key={i}>{w}</li>
+                              <ul className="list-disc list-inside text-xs text-[var(--text-secondary)] flex flex-col gap-0.5">
+                                {evalData.weaknesses.map((w, wIdx) => (
+                                  <li key={wIdx}>{w}</li>
                                 ))}
                               </ul>
                             </div>
                           )}
                         </div>
 
-                        {/* Coding Metrics if present */}
-                        {(evalData.codeCorrectness !== null ||
-                          evalData.codeEfficiency !== null ||
-                          evalData.codeReadability !== null) && (
-                          <div className="pt-2 border-t border-[var(--surface-border)] flex items-center gap-4 text-xs">
-                            {evalData.codeCorrectness !== null && (
-                              <span>
-                                Correctness: <strong>{evalData.codeCorrectness}/10</strong>
-                              </span>
-                            )}
-                            {evalData.codeEfficiency !== null && (
-                              <span>
-                                Efficiency: <strong>{evalData.codeEfficiency}/10</strong>
-                              </span>
-                            )}
-                            {evalData.codeReadability !== null && (
-                              <span>
-                                Readability: <strong>{evalData.codeReadability}/10</strong>
-                              </span>
-                            )}
+                        {/* Code Specific Metrics */}
+                        {evalData.codeCorrectness !== null && (
+                          <div className="mt-2 pt-3 border-t border-[var(--surface-border)] grid grid-cols-3 gap-2 text-center text-xs font-mono">
+                            <div>
+                              Correctness: <strong>{evalData.codeCorrectness}/10</strong>
+                            </div>
+                            <div>
+                              Efficiency: <strong>{evalData.codeEfficiency}/10</strong>
+                            </div>
+                            <div>
+                              Readability: <strong>{evalData.codeReadability}/10</strong>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -437,7 +475,7 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold flex items-center gap-2">
               <ShieldAlert size={20} className="text-[var(--color-warning)]" />
-              <span>Proctoring &amp; Activity Log</span>
+              <span>Proctoring &amp; Activity Log (A5)</span>
             </h2>
             <span className="text-xs text-[var(--text-tertiary)]">
               {flaggedEvents.length} security incident(s) logged
