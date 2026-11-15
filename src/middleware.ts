@@ -7,7 +7,9 @@ export default auth((req) => {
 
   const isAuthRoute =
     pathname.startsWith("/login") || pathname.startsWith("/register");
+  const isAdminRoute = pathname.startsWith("/admin");
   const isProtectedRoute =
+    isAdminRoute ||
     pathname.startsWith("/dashboard") ||
     pathname.startsWith("/interview") ||
     pathname.startsWith("/reports");
@@ -23,6 +25,11 @@ export default auth((req) => {
     return NextResponse.redirect(
       new URL(`/login?callbackUrl=${callbackUrl}`, req.nextUrl)
     );
+  }
+
+  // Enforce role-based access for admin routes
+  if (isAdminRoute && req.auth?.user?.role !== "ADMIN") {
+    return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
   }
 
   return NextResponse.next();
