@@ -6,10 +6,6 @@ import {
   BrainCircuit,
   LogOut,
   Plus,
-  BookOpen,
-  CheckCircle2,
-  Clock,
-  ListChecks,
   LayoutDashboard,
 } from "lucide-react";
 import { signOut } from "@/auth";
@@ -126,25 +122,25 @@ export default async function DashboardPage() {
             {
               label: "Total Sessions",
               value: totalInterviews,
-              icon: BookOpen,
+              iconType: "book",
               color: "primary",
             },
             {
               label: "Completed",
               value: completedInterviews,
-              icon: CheckCircle2,
+              iconType: "check",
               color: "success",
             },
             {
               label: "In Progress",
               value: inProgressInterviews,
-              icon: Clock,
+              iconType: "clock",
               color: "warning",
             },
             {
               label: "Pending",
               value: pendingInterviews,
-              icon: ListChecks,
+              iconType: "list",
               color: "muted",
             },
           ]}

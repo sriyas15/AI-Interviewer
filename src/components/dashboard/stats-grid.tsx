@@ -1,17 +1,24 @@
-"use client";
+import { BookOpen, CheckCircle2, Clock, ListChecks } from "lucide-react";
 
-import { type LucideIcon } from "lucide-react";
+export type StatIconType = "book" | "check" | "clock" | "list";
 
-interface StatItem {
+export interface StatItem {
   label: string;
   value: number;
-  icon: LucideIcon;
+  iconType: StatIconType;
   color: "primary" | "success" | "warning" | "muted";
 }
 
 interface StatsGridProps {
   stats: StatItem[];
 }
+
+const iconMap = {
+  book: BookOpen,
+  check: CheckCircle2,
+  clock: Clock,
+  list: ListChecks,
+};
 
 const colorMap = {
   primary: {
@@ -36,7 +43,7 @@ export function StatsGrid({ stats }: StatsGridProps) {
   return (
     <div className="stats-grid">
       {stats.map((stat) => {
-        const Icon = stat.icon;
+        const Icon = iconMap[stat.iconType] || BookOpen;
         const colors = colorMap[stat.color];
         return (
           <div key={stat.label} className="stat-card card">
@@ -56,4 +63,3 @@ export function StatsGrid({ stats }: StatsGridProps) {
     </div>
   );
 }
-
