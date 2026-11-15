@@ -38,7 +38,7 @@ export function CodeEditor({
     }
   };
 
-  // Safe In-Browser Execution Sandbox
+  // Safe Sandboxed In-Browser Execution via Web Worker with Timeout
   const handleRunCode = async () => {
     setIsRunning(true);
     setOutput(null);
@@ -56,48 +56,106 @@ export function CodeEditor({
         return;
       }
 
-      const logs: string[] = [];
-      const customConsole = {
-        log: (...args: unknown[]) => {
-          logs.push(args.map((a) => (typeof a === "object" ? JSON.stringify(a, null, 2) : String(a))).join(" "));
-        },
-        error: (...args: unknown[]) => {
-          logs.push("[ERROR] " + args.map((a) => String(a)).join(" "));
-        },
-        warn: (...args: unknown[]) => {
-          logs.push("[WARN] " + args.map((a) => String(a)).join(" "));
-        },
-        info: (...args: unknown[]) => {
-          logs.push("[INFO] " + args.map((a) => String(a)).join(" "));
-        },
-      };
+      if (typeof window === "undefined" || typeof Worker === "undefined") {
+        setOutput("Web Worker environment not available.");
+        setHasError(true);
+        setIsRunning(false);
+        return;
+      }
 
-      // Security Sandbox: Prevent access to cookies, local storage, fetch, etc.
-      const sandboxWrapper = `
-        return function(console, window, document, localStorage, sessionStorage, fetch, XMLHttpRequest) {
-          "use strict";
-          ${value}
+      // Isolate execution inside a Web Worker to prevent UI thread lock (e.g. while(true))
+      // and block access to DOM, cookies, window, fetch, etc.
+      const workerCode = `
+        self.onmessage = function(e) {
+          var code = e.data.code;
+          var logs = [];
+          var customConsole = {
+            log: function() {
+              var args = Array.prototype.slice.call(arguments);
+              logs.push(args.map(function(a) { return typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a); }).join(' '));
+            },
+            error: function() {
+              var args = Array.prototype.slice.call(arguments);
+              logs.push('[ERROR] ' + args.map(function(a) { return String(a); }).join(' '));
+            },
+            warn: function() {
+              var args = Array.prototype.slice.call(arguments);
+              logs.push('[WARN] ' + args.map(function(a) { return String(a); }).join(' '));
+            },
+            info: function() {
+              var args = Array.prototype.slice.call(arguments);
+              logs.push('[INFO] ' + args.map(function(a) { return String(a); }).join(' '));
+            }
+          };
+
+          try {
+            var runner = new Function(
+              'console', 'window', 'document', 'localStorage', 'sessionStorage', 'fetch', 'XMLHttpRequest', 'WebSocket', 'importScripts',
+              '"use strict"; ' + code
+            );
+            var result = runner(customConsole, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined);
+            if (result !== undefined) {
+              logs.push('=> Returned: ' + (typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)));
+            }
+            self.postMessage({ success: true, logs: logs });
+          } catch (err) {
+            self.postMessage({ success: false, error: err.message, logs: logs });
+          }
         };
       `;
 
-      // Create isolated function
-      const runner = new Function(sandboxWrapper)();
-      const result = runner(customConsole, {}, {}, {}, {}, () => {}, () => {});
+      const blob = new Blob([workerCode], { type: "application/javascript" });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
 
-      if (result !== undefined) {
-        logs.push(`=> Returned: ${typeof result === "object" ? JSON.stringify(result, null, 2) : String(result)}`);
-      }
+      // Enforce 3000ms execution timeout against infinite loops
+      const timeoutId = setTimeout(() => {
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+        setExecutionTime(3000);
+        setOutput("Execution timed out (3000ms limit exceeded). Check for infinite loops.");
+        setHasError(true);
+        setIsRunning(false);
+      }, 3000);
 
-      const elapsed = Math.round(performance.now() - startTime);
-      setExecutionTime(elapsed);
-      setOutput(logs.length > 0 ? logs.join("\n") : "Code executed successfully with no console output.");
-      setHasError(false);
+      worker.onmessage = (e) => {
+        clearTimeout(timeoutId);
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+
+        const elapsed = Math.round(performance.now() - startTime);
+        setExecutionTime(elapsed);
+
+        const { success, logs, error } = e.data;
+        if (success) {
+          setOutput(logs && logs.length > 0 ? logs.join("\n") : "Code executed successfully with no console output.");
+          setHasError(false);
+        } else {
+          const out = logs && logs.length > 0 ? `${logs.join("\n")}\nRuntime Error: ${error}` : `Runtime Error: ${error}`;
+          setOutput(out);
+          setHasError(true);
+        }
+        setIsRunning(false);
+      };
+
+      worker.onerror = (e) => {
+        clearTimeout(timeoutId);
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+
+        const elapsed = Math.round(performance.now() - startTime);
+        setExecutionTime(elapsed);
+        setOutput(`Runtime Error: ${e.message || "Script execution failed."}`);
+        setHasError(true);
+        setIsRunning(false);
+      };
+
+      worker.postMessage({ code: value });
     } catch (err) {
       const elapsed = Math.round(performance.now() - startTime);
       setExecutionTime(elapsed);
       setOutput(`Runtime Error: ${(err as Error).message}`);
       setHasError(true);
-    } finally {
       setIsRunning(false);
     }
   };
