@@ -75,6 +75,20 @@ function LoginForm() {
         return;
       }
 
+      if (callbackUrl === "/dashboard") {
+        try {
+          const sessionRes = await fetch("/api/auth/session");
+          const sessionData = await sessionRes.json();
+          if (sessionData?.user?.role === "ADMIN") {
+            router.push("/admin");
+            router.refresh();
+            return;
+          }
+        } catch {
+          // fallback to callbackUrl
+        }
+      }
+
       router.push(callbackUrl);
       router.refresh();
     } catch (err) {

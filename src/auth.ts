@@ -3,19 +3,13 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { Role } from "@prisma/client";
 import { db } from "@/lib/db";
 import { loginSchema } from "@/lib/validations";
+import { authConfig } from "@/auth.config";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  ...authConfig,
   adapter: PrismaAdapter(db),
-  session: {
-    strategy: "jwt",
-  },
-  pages: {
-    signIn: "/login",
-    error: "/login",
-  },
   providers: [
     Google({
       clientId: process.env.AUTH_GOOGLE_ID || process.env.GOOGLE_CLIENT_ID,
@@ -66,31 +60,25 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     }),
   ],
   callbacks: {
+    ...authConfig.callbacks,
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        if (user.role) {
-          token.role = user.role;
-        }
-      } else if (token.id) {
-        // Automatically sync role changes from DB without requiring manual re-login
-        const dbUser = await db.user.findUnique({
-          where: { id: token.id as string },
-          select: { role: true },
-        });
-        if (dbUser?.role) {
-          token.role = dbUser.role;
+        token.role = (user as any).role;
+
+        // If Google OAuth or if role is missing on user object, look it up in DB
+        if (!token.role && user.email) {
+          const dbUser = await db.user.findUnique({
+            where: { email: user.email.toLowerCase().trim() },
+            select: { id: true, role: true },
+          });
+          if (dbUser) {
+            token.id = dbUser.id;
+            token.role = dbUser.role;
+          }
         }
       }
       return token;
     },
-    async session({ session, token }) {
-      if (token && session.user) {
-        session.user.id = (token.id as string) || (token.sub as string) || "";
-        session.user.role = (token.role as Role) || Role.CANDIDATE;
-      }
-      return session;
-    },
   },
 });
-
