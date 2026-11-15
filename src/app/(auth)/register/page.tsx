@@ -81,8 +81,12 @@ function RegisterForm() {
         return;
       }
 
-      // Successful registration - redirect to login with query param
-      router.push("/login?registered=true");
+      // Successful registration - redirect to verify-email prompt
+      if (result.requiresVerification) {
+        router.push(`/verify-email?email=${encodeURIComponent(email.trim().toLowerCase())}`);
+      } else {
+        router.push("/login?registered=true");
+      }
     } catch (err) {
       console.error("Registration submission error:", err);
       setError("An unexpected error occurred. Please try again.");

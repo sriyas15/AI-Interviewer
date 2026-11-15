@@ -22,6 +22,8 @@ function LoginForm() {
   const callbackUrl = getSafeCallbackUrl(searchParams.get("callbackUrl"));
   const urlError = searchParams.get("error");
   const registered = searchParams.get("registered");
+  const verified = searchParams.get("verified");
+  const reset = searchParams.get("reset");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -95,7 +97,21 @@ function LoginForm() {
       {registered && (
         <div className="auth-alert auth-alert-success">
           <CheckCircle2 size={16} />
-          <span>Account created successfully! Please sign in.</span>
+          <span>Account created successfully! Please check your email to verify your account or sign in.</span>
+        </div>
+      )}
+
+      {verified && (
+        <div className="auth-alert auth-alert-success">
+          <CheckCircle2 size={16} />
+          <span>Email address verified successfully! Please sign in.</span>
+        </div>
+      )}
+
+      {reset && (
+        <div className="auth-alert auth-alert-success">
+          <CheckCircle2 size={16} />
+          <span>Password updated successfully! Please sign in with your new password.</span>
         </div>
       )}
 
@@ -137,9 +153,17 @@ function LoginForm() {
         </div>
 
         <div className="form-group">
-          <label className="form-label" htmlFor="password">
-            Password
-          </label>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.375rem" }}>
+            <label className="form-label" htmlFor="password" style={{ margin: 0 }}>
+              Password
+            </label>
+            <Link
+              href="/forgot-password"
+              style={{ fontSize: "0.75rem", color: "var(--color-primary-light)", textDecoration: "none" }}
+            >
+              Forgot password?
+            </Link>
+          </div>
           <div className="password-input-wrapper">
             <input
               id="password"
