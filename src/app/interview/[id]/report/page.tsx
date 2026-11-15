@@ -45,8 +45,8 @@ export default async function InterviewReportPage({ params }: PageProps) {
     notFound();
   }
 
-  // Security check: Only the candidate who owns the interview can view the report
-  if (interview.userId !== session.user.id) {
+  // Security check: Only the candidate who owns the interview (or an admin) can view the report
+  if (interview.userId !== session.user.id && session.user.role !== "ADMIN") {
     redirect("/dashboard");
   }
 
