@@ -31,6 +31,12 @@ export async function registerUser(input: RegisterInput): Promise<ActionResult> 
     });
 
     if (existingUser) {
+      if (!existingUser.passwordHash) {
+        return {
+          success: false,
+          error: "An account with this email was created using Google Sign-In. Please sign in with Google.",
+        };
+      }
       return {
         success: false,
         error: "An account with this email already exists.",
