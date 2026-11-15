@@ -38,8 +38,8 @@ export default async function InterviewStartPage({ params }: PageProps) {
     notFound();
   }
 
-  // Security check: Only the candidate who owns the interview can access it
-  if (interview.userId !== session.user.id) {
+  // Security check: Only the candidate who owns the interview (or an admin) can access it
+  if (interview.userId !== session.user.id && session.user.role !== "ADMIN") {
     redirect("/dashboard");
   }
 
