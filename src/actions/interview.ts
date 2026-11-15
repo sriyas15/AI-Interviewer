@@ -120,8 +120,16 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       },
     });
 
-    if (!interview || interview.userId !== session.user.id) {
+    if (!interview || (interview.userId !== session.user.id && session.user.role !== "ADMIN")) {
       return { success: false, error: "Interview not found or unauthorized" };
+    }
+
+    // If interview is marked completed, return completed status immediately
+    if (interview.status === "COMPLETED") {
+      return {
+        success: true,
+        isCompleted: true,
+      };
     }
 
     const existingQuestions = interview.questions;
@@ -226,13 +234,31 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       },
     });
 
-    if (!interview || interview.userId !== session.user.id) {
+    if (!interview || (interview.userId !== session.user.id && session.user.role !== "ADMIN")) {
       return { success: false, error: "Interview not found or unauthorized" };
+    }
+
+    // Prevent submissions on already completed interviews
+    if (interview.status === "COMPLETED") {
+      return { success: false, error: "This interview has already been completed." };
+    }
+
+    // Input payload size constraints against DoS / memory exhaustion
+    if (content && content.length > 20000) {
+      return { success: false, error: "Answer text exceeds maximum limit of 20,000 characters." };
+    }
+    if (code && code.length > 50000) {
+      return { success: false, error: "Code snippet exceeds maximum limit of 50,000 characters." };
     }
 
     const targetQuestion = interview.questions.find((q) => q.id === questionId);
     if (!targetQuestion) {
       return { success: false, error: "Question not found in this interview" };
+    }
+
+    // Prevent duplicate submissions and unique constraint race conditions
+    if (targetQuestion.response) {
+      return { success: false, error: "An answer has already been submitted for this question." };
     }
 
     // 1. Evaluate with AI
@@ -380,21 +406,36 @@ export async function logActivityEvent(input: LogActivityInput) {
 
     const { interviewId, type, description, metadata } = input;
 
+    const ALLOWED_TYPES = [
+      "TAB_SWITCH",
+      "COPY",
+      "PASTE",
+      "FULLSCREEN_EXIT",
+      "WINDOW_BLUR",
+      "SUSPICIOUS_TYPING",
+    ] as const;
+
+    if (!ALLOWED_TYPES.includes(type)) {
+      return { success: false };
+    }
+
     // Verify interview ownership
     const interview = await db.interview.findUnique({
       where: { id: interviewId },
       select: { userId: true },
     });
 
-    if (!interview || interview.userId !== session.user.id) {
+    if (!interview || (interview.userId !== session.user.id && session.user.role !== "ADMIN")) {
       return { success: false };
     }
+
+    const safeDescription = (description || `Candidate triggered ${type}`).slice(0, 500);
 
     await db.activityEvent.create({
       data: {
         interviewId,
         type,
-        description: description || `Candidate triggered ${type}`,
+        description: safeDescription,
         metadata: metadata ? (metadata as object) : undefined,
       },
     });
