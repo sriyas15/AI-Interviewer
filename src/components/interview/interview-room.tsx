@@ -14,7 +14,9 @@ import {
   HelpCircle,
   Code2,
   ArrowRight,
-  BookOpen,
+  Lightbulb,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import { AIAvatar, AIStatus } from "./ai-avatar";
 import { CodeEditor } from "./code-editor";
@@ -33,15 +35,6 @@ interface QuestionData {
   content: string;
   context: string | null;
   expectedTopics: string[];
-}
-
-interface EvaluationResult {
-  score: number;
-  feedback: string;
-  strengths: string[];
-  weaknesses: string[];
-  shouldFollowUp: boolean;
-  followUpQuestion?: string;
 }
 
 interface InterviewRoomProps {
@@ -67,14 +60,27 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [isLoadingQuestion, setIsLoadingQuestion] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [lastEvaluation, setLastEvaluation] = useState<EvaluationResult | null>(null);
+  const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Question Timer
+  // State Machine: Follow-up tracking (C2)
+  const [followUpCount, setFollowUpCount] = useState<number>(0);
+  const [activeFollowUpPrompt, setActiveFollowUpPrompt] = useState<string | null>(null);
+
+  // Capped Hints State (C5)
+  const [hintsUsed, setHintsUsed] = useState<number>(0);
+  const [revealedHints, setRevealedHints] = useState<string[]>([]);
+  const [showHintConfirm, setShowHintConfirm] = useState<boolean>(false);
+
+  // Autosave Draft Notification (C3)
+  const [draftRestored, setDraftRestored] = useState<boolean>(false);
+
+  // Question Stopwatch & Stage Time Limit (C2)
   const [secondsElapsed, setSecondsElapsed] = useState<number>(0);
+  const STAGE_TIME_LIMIT_SECS = 360; // 6 mins per stage
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Speech Recognition hook
+  // Speech Recognition hook (C8)
   const {
     isListening,
     transcript,
@@ -85,15 +91,22 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     resetTranscript,
   } = useSpeechRecognition();
 
-  // Load or generate question on mount
+  // Draft Key Helper (C3)
+  const getDraftKey = (qId: string) => `interview_draft_${interview.id}_${qId}`;
+
+  // Load next question or initialize
   const fetchQuestion = useCallback(async () => {
     setIsLoadingQuestion(true);
+    setIsTransitioning(false);
     setError(null);
-    setLastEvaluation(null);
     setAnswerText("");
     setCodeText("");
     resetTranscript();
     setSecondsElapsed(0);
+    setFollowUpCount(0);
+    setActiveFollowUpPrompt(null);
+    setHintsUsed(0);
+    setRevealedHints([]);
 
     try {
       const res = await getOrGenerateNextQuestion(interview.id);
@@ -113,6 +126,22 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         setCurrentQuestion(res.question as QuestionData);
         setTotalQuestions(res.totalQuestions || 5);
         setAiStatus("speaking");
+
+        // Restore autosaved draft if exists (C3)
+        try {
+          const savedDraft = localStorage.getItem(getDraftKey(res.question.id));
+          if (savedDraft) {
+            const parsed = JSON.parse(savedDraft);
+            if (parsed.answerText || parsed.codeText) {
+              setAnswerText(parsed.answerText || "");
+              setCodeText(parsed.codeText || "");
+              setDraftRestored(true);
+              setTimeout(() => setDraftRestored(false), 3500);
+            }
+          }
+        } catch {
+          // ignore draft read errors
+        }
       }
     } catch {
       setError("Failed to load interview question. Please try refreshing.");
@@ -125,9 +154,9 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     fetchQuestion();
   }, [fetchQuestion]);
 
-  // Question Stopwatch timer
+  // Question Stopwatch timer & Stage Limit (C2)
   useEffect(() => {
-    if (!isLoadingQuestion && !lastEvaluation && currentQuestion) {
+    if (!isLoadingQuestion && !isTransitioning && currentQuestion) {
       timerRef.current = setInterval(() => {
         setSecondsElapsed((prev) => prev + 1);
       }, 1000);
@@ -136,13 +165,28 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isLoadingQuestion, lastEvaluation, currentQuestion]);
+  }, [isLoadingQuestion, isTransitioning, currentQuestion]);
 
-  // Sync speech-to-text transcript into answer text
+  // Autosave Draft to LocalStorage whenever candidate types (C3)
+  useEffect(() => {
+    if (!currentQuestion || isLoadingQuestion || isTransitioning) return;
+
+    if (answerText.trim() || codeText.trim()) {
+      try {
+        localStorage.setItem(
+          getDraftKey(currentQuestion.id),
+          JSON.stringify({ answerText, codeText, timestamp: Date.now() })
+        );
+      } catch {
+        // quota errors ignored
+      }
+    }
+  }, [answerText, codeText, currentQuestion, isLoadingQuestion, isTransitioning]);
+
+  // Sync speech-to-text transcript into answer text (C8)
   useEffect(() => {
     if (transcript) {
       setAnswerText((prev) => {
-        // Only append if it doesn't already end with transcript
         const trimmed = prev.trim();
         return trimmed ? `${trimmed} ${transcript.trim()}` : transcript.trim();
       });
@@ -159,19 +203,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     }
   }, [isListening, aiStatus]);
 
-  // Intercept paste event on answer input for anti-cheat audit
-  const handlePaste = (e: React.ClipboardEvent) => {
-    const pasted = e.clipboardData.getData("text");
-    if (pasted.length > 50) {
-      logActivityEvent({
-        interviewId: interview.id,
-        type: "PASTE",
-        description: `Pasted ${pasted.length} characters into answer editor.`,
-      });
-    }
-  };
-
-  // Submit response & trigger evaluation
+  // Submit response & trigger state machine transition (C2)
   const handleSubmitAnswer = async () => {
     if (!currentQuestion) return;
 
@@ -200,22 +232,73 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         return;
       }
 
-      if (result.evaluation) {
-        setLastEvaluation(result.evaluation);
+      // Clear autosaved draft upon successful submission (C3)
+      try {
+        localStorage.removeItem(getDraftKey(currentQuestion.id));
+      } catch {
+        // ignore
       }
 
+      // Check if AI generated a follow-up and we haven't reached the 2-follow-up cap (C2)
+      if (
+        result.evaluation?.shouldFollowUp &&
+        followUpCount < 2 &&
+        result.evaluation.followUpQuestion
+      ) {
+        setFollowUpCount((prev) => prev + 1);
+        setActiveFollowUpPrompt(result.evaluation.followUpQuestion);
+        setAnswerText("");
+        setAiStatus("speaking");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Otherwise, candidate completed this question.
+      // Candidate does NOT see scores/evaluation here (adhering to score-blind rule and C2 state machine).
+      setIsTransitioning(true);
+
       if (result.isCompleted) {
-        // Completed all questions -> redirect to report after brief review
         setTimeout(() => {
           router.push(`/interview/${interview.id}/report`);
-        }, 3000);
+        }, 1800);
+      } else {
+        setTimeout(() => {
+          fetchQuestion();
+        }, 1500);
       }
     } catch {
-      setError("An unexpected error occurred while evaluating your answer.");
+      setError("An unexpected error occurred while saving your answer.");
     } finally {
       setIsSubmitting(false);
       setAiStatus("idle");
     }
+  };
+
+  // Capped Hints Request Handler (C5)
+  const handleUnlockHint = () => {
+    if (hintsUsed >= 3 || !currentQuestion) return;
+
+    const nextLevel = hintsUsed + 1;
+    let newHintText = "";
+
+    if (nextLevel === 1) {
+      newHintText = `[Hint 1: Direction] Focus on break-down: identify the primary constraints and consider a 2-pointer or memoized approach.`;
+    } else if (nextLevel === 2) {
+      newHintText = `[Hint 2: Strategy] Optimal time complexity is O(N) or O(N log N). Avoid quadratic nested loops by using a hash map or sorting first.`;
+    } else {
+      newHintText = `[Hint 3: Scaffold] Initialize state tracking, iterate once while checking complementary target values in constant time.`;
+    }
+
+    setHintsUsed(nextLevel);
+    setRevealedHints((prev) => [...prev, newHintText]);
+    setShowHintConfirm(false);
+
+    // Log hint penalty event (C5)
+    logActivityEvent({
+      interviewId: interview.id,
+      type: "SUSPICIOUS_TYPING",
+      description: `Candidate requested Hint Level ${nextLevel} (-${nextLevel * 5}% penalty applied).`,
+    });
   };
 
   const formatTimer = (totalSeconds: number) => {
@@ -237,6 +320,9 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     }
   };
 
+  const timeRemainingSecs = Math.max(0, STAGE_TIME_LIMIT_SECS - secondsElapsed);
+  const isTimeRunningLow = timeRemainingSecs <= 60;
+
   return (
     <div className="flex-1 flex flex-col min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
       {/* Top Session Action Bar */}
@@ -249,13 +335,28 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Question Stopwatch */}
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[var(--bg-secondary)] border border-[var(--surface-border)] font-mono text-xs text-[var(--text-primary)]">
-            <Clock size={13} className="text-[var(--text-tertiary)]" />
+          {/* Draft Restored Pill (C3) */}
+          {draftRestored && (
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 flex items-center gap-1">
+              <CheckCircle2 size={11} /> Unsaved draft restored
+            </span>
+          )}
+
+          {/* Question Stopwatch & Stage Time Limit Indicator (C2) */}
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border font-mono text-xs ${
+              isTimeRunningLow
+                ? "bg-red-500/15 border-red-500/40 text-red-400 animate-pulse"
+                : "bg-[var(--bg-secondary)] border-[var(--surface-border)] text-[var(--text-primary)]"
+            }`}
+            title="Stage elapsed time / Recommended limit"
+          >
+            <Clock size={13} className={isTimeRunningLow ? "text-red-400" : "text-[var(--text-tertiary)]"} />
             <span>{formatTimer(secondsElapsed)}</span>
+            <span className="text-[var(--text-tertiary)] text-[10px]">/ 6m</span>
           </div>
 
-          {/* Anti-cheat proctoring indicator */}
+          {/* Anti-cheat proctoring guard with fullscreen & throttling (C6) */}
           <ProctoringGuard interviewId={interview.id} />
         </div>
       </header>
@@ -267,7 +368,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
           <div className="h-[320px]">
             <AIAvatar
               status={aiStatus}
-              speechText={currentQuestion?.content}
+              speechText={activeFollowUpPrompt || currentQuestion?.content}
               autoSpeak={true}
             />
           </div>
@@ -275,9 +376,9 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
           {/* Progress Card */}
           <div className="card p-4 border border-[var(--surface-border)] rounded-xl space-y-3">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-[var(--text-secondary)]">Interview Progress</span>
+              <span className="text-[var(--text-secondary)]">Assessment Progress</span>
               <span className="font-bold text-[var(--color-primary)]">
-                Question {currentQuestion?.orderIndex || 1} of {totalQuestions}
+                Stage {currentQuestion?.orderIndex || 1} of {totalQuestions}
               </span>
             </div>
 
@@ -289,24 +390,57 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
                 }}
               />
             </div>
+
+            {/* Capped Hints Section (C5) */}
+            <div className="pt-2 border-t border-[var(--surface-border)] flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
+                <Lightbulb size={13} style={{ color: hintsUsed > 0 ? "var(--color-warning)" : "inherit" }} />
+                <span>Hints: <strong>{hintsUsed}/3</strong></span>
+              </div>
+
+              {hintsUsed < 3 && !isTransitioning && (
+                <button
+                  type="button"
+                  onClick={() => setShowHintConfirm(true)}
+                  className="btn btn-ghost btn-sm text-[11px] py-0.5 px-2 text-amber-400 hover:text-amber-300"
+                >
+                  Request Hint (-{(hintsUsed + 1) * 5}%)
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Revealed Hints Box (C5) */}
+          {revealedHints.length > 0 && (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-2 text-xs text-amber-200">
+              <div className="font-semibold flex items-center gap-1.5 text-amber-300">
+                <Lightbulb size={13} />
+                <span>Unlocked Guidance:</span>
+              </div>
+              {revealedHints.map((hint, hIdx) => (
+                <p key={hIdx} className="text-[11px] leading-relaxed">
+                  {hint}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Right Column (8 cols): Question Content, Input Area & Feedback */}
+        {/* Right Column (8 cols): Question Content, Input Area & Actions */}
         <div className="lg:col-span-8 flex flex-col gap-6">
-          {isLoadingQuestion ? (
+          {isLoadingQuestion || isTransitioning ? (
             <div className="card-glass p-12 rounded-2xl border border-[var(--surface-border)] flex flex-col items-center justify-center gap-3 text-center min-h-[350px]">
               <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)]" />
               <p className="text-sm font-semibold text-[var(--text-primary)]">
-                AI Interviewer is preparing your next question...
+                {isTransitioning ? "Answer recorded. Advancing to next stage..." : "AI Interviewer is preparing your next question..."}
               </p>
               <p className="text-xs text-[var(--text-tertiary)]">
-                Adapting question complexity based on your previous answers and target role.
+                {isTransitioning ? "Transcripts and code saved successfully." : "Adapting question complexity based on your performance."}
               </p>
             </div>
           ) : currentQuestion ? (
             <>
-              {/* Question Card */}
+              {/* Question Card (C7: Clean question view with NO leaked rubric/expected focus) */}
               <div className="card-glass p-6 md:p-8 rounded-2xl border border-[var(--surface-border)] shadow-xl space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -326,7 +460,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
                   </div>
                 </div>
 
-                {/* Question Text */}
+                {/* Primary Question Text */}
                 <h2 className="text-xl md:text-2xl font-bold leading-relaxed tracking-tight text-[var(--text-primary)]">
                   {currentQuestion.content}
                 </h2>
@@ -338,20 +472,19 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
                   </div>
                 )}
 
-                {/* Expected Topics Hint */}
-                {currentQuestion.expectedTopics?.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-2">
-                    <span className="text-xs text-[var(--text-tertiary)] flex items-center gap-1">
-                      <BookOpen size={12} /> Expected Focus:
-                    </span>
-                    {currentQuestion.expectedTopics.map((topic) => (
-                      <span
-                        key={topic}
-                        className="px-2 py-0.5 rounded text-[11px] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--surface-border)]"
-                      >
-                        {topic}
-                      </span>
-                    ))}
+                {/* Follow-up Question Callout (C2: State Machine Follow-Up Active) */}
+                {activeFollowUpPrompt && (
+                  <div className="p-4 rounded-xl bg-purple-500/15 border border-purple-500/35 space-y-1.5 animate-slide-up">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-purple-300">
+                      <Sparkles size={13} className="text-purple-400" />
+                      <span>AI Follow-Up Inquiry (Follow-up {followUpCount} of 2)</span>
+                    </div>
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">
+                      {activeFollowUpPrompt}
+                    </p>
+                    <p className="text-[11px] text-[var(--text-secondary)]">
+                      Please address this follow-up detail in your response below before moving forward.
+                    </p>
                   </div>
                 )}
               </div>
@@ -365,166 +498,157 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
               )}
 
               {/* Response Workspace */}
-              {!lastEvaluation ? (
-                <div className="space-y-4">
-                  {/* If Coding Question, render Live Code Editor */}
-                  {currentQuestion.type === "CODING" && (
-                    <div className="space-y-2">
-                      <CodeEditor
-                        value={codeText}
-                        onChange={setCodeText}
-                        language={codeLanguage}
-                        onLanguageChange={setCodeLanguage}
-                      />
-                    </div>
-                  )}
+              <div className="space-y-4">
+                {/* If Coding Question, render Live Code Editor with Test Cases (C4) */}
+                {currentQuestion.type === "CODING" && (
+                  <div className="space-y-2">
+                    <CodeEditor
+                      value={codeText}
+                      onChange={setCodeText}
+                      language={codeLanguage}
+                      onLanguageChange={setCodeLanguage}
+                    />
+                  </div>
+                )}
 
-                  {/* Verbal / Written Answer Box */}
-                  <div className="card p-4 border border-[var(--surface-border)] rounded-2xl space-y-3 bg-[var(--surface)]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                        {currentQuestion.type === "CODING" ? "Explanation / Approach" : "Candidate Response"}
-                      </span>
+                {/* Verbal / Written Answer Box (C8: Typing always works, voice as fallback) */}
+                <div className="card p-4 border border-[var(--surface-border)] rounded-2xl space-y-3 bg-[var(--surface)]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                      {currentQuestion.type === "CODING"
+                        ? "Explanation & Tradeoffs (Type or Speak)"
+                        : "Candidate Response (Type or Speak)"}
+                    </span>
 
-                      {/* Microphone Voice Capture Toggle */}
-                      {speechSupported && (
-                        <button
-                          type="button"
-                          onClick={isListening ? stopListening : startListening}
-                          className={`btn btn-sm text-xs py-1.5 px-3 flex items-center gap-2 transition-all ${
-                            isListening
-                              ? "bg-[var(--color-error)] text-white shadow-lg animate-pulse"
-                              : "btn-secondary text-[var(--color-primary)] border-[rgba(108,92,231,0.3)]"
-                          }`}
-                        >
-                          {isListening ? (
-                            <>
-                              <MicOff size={13} />
-                              <span>Stop Recording</span>
-                            </>
-                          ) : (
-                            <>
-                              <Mic size={13} />
-                              <span>Answer with Voice (STT)</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="relative">
-                      <textarea
-                        value={answerText}
-                        onChange={(e) => setAnswerText(e.target.value)}
-                        onPaste={handlePaste}
-                        rows={5}
-                        placeholder={
-                          isListening
-                            ? "Listening to your voice... Speak clearly into your microphone."
-                            : "Type your answer or click 'Answer with Voice' to speak..."
-                        }
-                        className="input w-full p-3 resize-y min-h-[120px] text-sm leading-relaxed"
-                      />
-                      {interimTranscript && (
-                        <p className="text-xs text-[var(--color-primary)] italic px-2 mt-1 animate-pulse">
-                          Transcribing: &quot;{interimTranscript}&quot;
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Bottom Action Bar */}
-                    <div className="flex items-center justify-between pt-2">
-                      <span className="text-xs text-[var(--text-tertiary)] flex items-center gap-1">
-                        <HelpCircle size={13} />
-                        You can refine your transcribed text before submitting.
-                      </span>
-
+                    {/* Microphone Voice Capture Toggle */}
+                    {speechSupported && (
                       <button
                         type="button"
-                        onClick={handleSubmitAnswer}
-                        disabled={isSubmitting || (!answerText.trim() && !codeText.trim())}
-                        className="btn btn-primary px-5 py-2.5 text-xs font-semibold flex items-center gap-2 shadow-lg disabled:opacity-50"
+                        onClick={isListening ? stopListening : startListening}
+                        className={`btn btn-sm text-xs py-1.5 px-3 flex items-center gap-2 transition-all ${
+                          isListening
+                            ? "bg-[var(--color-error)] text-white shadow-lg animate-pulse"
+                            : "btn-secondary text-[var(--color-primary)] border-[rgba(108,92,231,0.3)]"
+                        }`}
                       >
-                        {isSubmitting ? (
+                        {isListening ? (
                           <>
-                            <Loader2 size={14} className="animate-spin" />
-                            <span>AI Evaluating...</span>
+                            <MicOff size={13} />
+                            <span>Stop Recording</span>
                           </>
                         ) : (
                           <>
-                            <span>Submit Answer</span>
-                            <Send size={13} />
+                            <Mic size={13} />
+                            <span>Answer with Voice (STT)</span>
                           </>
                         )}
                       </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                /* Instant Feedback Review Before Next Question */
-                <div className="card-glass p-6 md:p-8 rounded-2xl border border-[var(--color-primary)] shadow-2xl space-y-5 animate-fade-in">
-                  <div className="flex items-center justify-between pb-3 border-b border-[var(--surface-border)]">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 size={18} className="text-[var(--color-success)]" />
-                      <h3 className="font-bold text-base text-[var(--text-primary)]">
-                        Question Evaluation
-                      </h3>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--color-primary-subtle)] text-[var(--color-primary)] font-bold text-sm">
-                      <Sparkles size={14} />
-                      <span>{lastEvaluation.score.toFixed(1)} / 10</span>
-                    </div>
+                    )}
                   </div>
 
-                  <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-                    {lastEvaluation.feedback}
-                  </p>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                    <div className="p-3.5 rounded-xl bg-[var(--color-success-subtle)] border border-[rgba(0,214,143,0.2)]">
-                      <span className="font-semibold text-[var(--color-success)] block mb-1">
-                        Demonstrated Strengths
-                      </span>
-                      <ul className="list-disc list-inside space-y-1 text-[var(--text-secondary)]">
-                        {lastEvaluation.strengths.map((s, idx) => (
-                          <li key={idx}>{s}</li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <div className="p-3.5 rounded-xl bg-[var(--color-warning-subtle)] border border-[rgba(255,170,0,0.2)]">
-                      <span className="font-semibold text-[var(--color-warning)] block mb-1">
-                        Areas for Improvement
-                      </span>
-                      <ul className="list-disc list-inside space-y-1 text-[var(--text-secondary)]">
-                        {lastEvaluation.weaknesses.map((w, idx) => (
-                          <li key={idx}>{w}</li>
-                        ))}
-                      </ul>
-                    </div>
+                  <div className="relative">
+                    <textarea
+                      value={answerText}
+                      onChange={(e) => setAnswerText(e.target.value)}
+                      rows={5}
+                      placeholder={
+                        isListening
+                          ? "Listening to your voice... Speak clearly into your microphone."
+                          : "Type your answer or click 'Answer with Voice' to speak... (Autosaved continuously)"
+                      }
+                      className="input w-full p-3 resize-y min-h-[120px] text-sm leading-relaxed"
+                    />
+                    {interimTranscript && (
+                      <p className="text-xs text-[var(--color-primary)] italic px-2 mt-1 animate-pulse">
+                        Transcribing: &quot;{interimTranscript}&quot;
+                      </p>
+                    )}
                   </div>
 
-                  <div className="pt-3 flex justify-end">
+                  {/* Bottom Action Bar */}
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-xs text-[var(--text-tertiary)] flex items-center gap-1">
+                      <HelpCircle size={13} />
+                      Closing or refreshing the tab will not lose your work (autosaved).
+                    </span>
+
                     <button
                       type="button"
-                      onClick={fetchQuestion}
-                      className="btn btn-primary px-6 py-2.5 text-xs font-semibold flex items-center gap-2"
+                      onClick={handleSubmitAnswer}
+                      disabled={isSubmitting || (!answerText.trim() && !codeText.trim())}
+                      className="btn btn-primary px-5 py-2.5 text-xs font-semibold flex items-center gap-2 shadow-lg disabled:opacity-50"
                     >
-                      <span>
-                        {currentQuestion.orderIndex >= totalQuestions
-                          ? "View Comprehensive Report"
-                          : "Advance to Next Question"}
-                      </span>
-                      <ArrowRight size={14} />
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          <span>AI Recording...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>
+                            {activeFollowUpPrompt
+                              ? "Submit Follow-Up Answer"
+                              : "Submit & Proceed"}
+                          </span>
+                          <Send size={13} />
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
-              )}
+              </div>
             </>
           ) : null}
         </div>
       </main>
+
+      {/* ─── MODAL: Hint Confirmation (C5) ─── */}
+      {showHintConfirm && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 999,
+            backgroundColor: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            className="card card-glass"
+            style={{ width: "100%", maxWidth: "420px", padding: "1.5rem", borderRadius: "var(--radius-lg)" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem", color: "var(--color-warning)" }}>
+              <AlertTriangle size={20} />
+              <h3 style={{ fontSize: "1rem", fontWeight: 700 }}>Request Hint Level {hintsUsed + 1}?</h3>
+            </div>
+            <p style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+              Requesting Hint {hintsUsed + 1} will reveal structured guidance, but will deduct{" "}
+              <strong style={{ color: "var(--color-warning)" }}>{(hintsUsed + 1) * 5}%</strong> from this question&apos;s score.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1.25rem" }}>
+              <button
+                type="button"
+                onClick={() => setShowHintConfirm(false)}
+                className="btn btn-secondary btn-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleUnlockHint}
+                className="btn btn-primary btn-sm"
+                style={{ backgroundColor: "var(--color-warning)", borderColor: "var(--color-warning)", color: "#000000" }}
+              >
+                Accept Penalty &amp; Reveal Hint
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

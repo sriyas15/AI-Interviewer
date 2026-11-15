@@ -60,7 +60,8 @@ export function InterviewLobby({ interview }: InterviewLobbyProps) {
   const [cameraStatus, setCameraStatus] = useState<"off" | "on" | "denied">("off");
   const [micVolume, setMicVolume] = useState<number>(0);
   const [soundTested, setSoundTested] = useState<boolean>(false);
-  const [confirmedRules, setConfirmedRules] = useState<boolean>(false);
+  const [agreedToAiRecording, setAgreedToAiRecording] = useState<boolean>(false);
+  const [agreedToProctoring, setAgreedToProctoring] = useState<boolean>(false);
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -492,33 +493,60 @@ export function InterviewLobby({ interview }: InterviewLobbyProps) {
               </div>
             </div>
 
-            {/* Connection Check */}
-            <div className="pt-3 border-t border-[var(--surface-border)] flex items-center justify-between text-xs text-[var(--text-tertiary)]">
-              <span className="flex items-center gap-1.5">
-                <Wifi size={14} className="text-[var(--color-success)]" />
-                Network Connection
-              </span>
-              <span className="text-[var(--color-success)] font-medium">Optimal</span>
+            {/* AI-Run Notice & Transparency (C1) */}
+            <div className="p-3.5 rounded-xl bg-purple-500/10 border border-purple-500/25 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-purple-300">
+                <Sparkles size={14} className="text-purple-400" />
+                <span>AI-Run Autonomous Interview Notice</span>
+              </div>
+              <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                This interview is conducted by an artificial intelligence interviewer. Responses, verbal transcripts, submitted code, and proctoring activity will be recorded and delivered to the recruiter for human hiring review.
+              </p>
             </div>
 
-            {/* Confirmation Checkbox */}
-            <label className="pt-2 flex items-start gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={confirmedRules}
-                onChange={(e) => setConfirmedRules(e.target.checked)}
-                className="mt-0.5 rounded border-[var(--surface-border)] bg-[var(--bg-secondary)] text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
-              />
-              <span className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                I have checked my microphone/speakers and agree to the simulation interview conditions.
+            {/* Connection Check & Browser Capabilities */}
+            <div className="pt-2 border-t border-[var(--surface-border)] flex items-center justify-between text-xs text-[var(--text-tertiary)]">
+              <span className="flex items-center gap-1.5">
+                <Wifi size={14} className="text-[var(--color-success)]" />
+                Browser &amp; Network Environment
               </span>
-            </label>
+              <span className="text-[var(--color-success)] font-medium flex items-center gap-1">
+                <CheckCircle2 size={12} /> Ready
+              </span>
+            </div>
+
+            {/* Explicit Consent Checkboxes (C1) */}
+            <div className="space-y-2.5 pt-1">
+              <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={agreedToAiRecording}
+                  onChange={(e) => setAgreedToAiRecording(e.target.checked)}
+                  className="mt-0.5 rounded border-[var(--surface-border)] bg-[var(--bg-secondary)] text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
+                />
+                <span className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  I understand this interview is AI-run and consent to recording my verbal answers, submitted code, and evaluation logs for review.
+                </span>
+              </label>
+
+              <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={agreedToProctoring}
+                  onChange={(e) => setAgreedToProctoring(e.target.checked)}
+                  className="mt-0.5 rounded border-[var(--surface-border)] bg-[var(--bg-secondary)] text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
+                />
+                <span className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  I agree to proctoring guidelines: maintaining fullscreen mode, no unauthorized tab switching, and solving problems independently.
+                </span>
+              </label>
+            </div>
 
             {/* Launch Action */}
             <button
               type="button"
               onClick={handleStartInterview}
-              disabled={isLaunching || !confirmedRules}
+              disabled={isLaunching || !agreedToAiRecording || !agreedToProctoring}
               className="btn btn-primary w-full py-3 text-sm font-semibold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 transition-all"
             >
               {isLaunching ? (
