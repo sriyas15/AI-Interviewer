@@ -72,6 +72,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (user.role) {
           token.role = user.role;
         }
+      } else if (token.id) {
+        // Automatically sync role changes from DB without requiring manual re-login
+        const dbUser = await db.user.findUnique({
+          where: { id: token.id as string },
+          select: { role: true },
+        });
+        if (dbUser?.role) {
+          token.role = dbUser.role;
+        }
       }
       return token;
     },
