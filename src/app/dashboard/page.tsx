@@ -4,14 +4,13 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import {
   BrainCircuit,
-  LogOut,
   Plus,
   LayoutDashboard,
 } from "lucide-react";
-import { signOut } from "@/auth";
 import { InterviewList } from "@/components/dashboard/interview-list";
 import { StatsGrid } from "@/components/dashboard/stats-grid";
 import { EmptyState } from "@/components/dashboard/empty-state";
+import { ProfileDropdown } from "@/components/auth/profile-dropdown";
 
 // This page requires auth + DB — intentionally dynamic, not statically prerendered
 export const instant = false;
@@ -69,32 +68,14 @@ export default async function DashboardPage() {
               <LayoutDashboard size={13} />
               <span>Candidate</span>
             </div>
-            <div className="nav-user">
-              {user?.image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.image}
-                  alt={displayName}
-                  className="nav-avatar"
-                />
-              ) : (
-                <div className="nav-avatar-placeholder">
-                  {firstName[0].toUpperCase()}
-                </div>
-              )}
-              <span className="nav-user-name">{firstName}</span>
-            </div>
-            <form
-              action={async () => {
-                "use server";
-                await signOut({ redirectTo: "/" });
+            <ProfileDropdown
+              user={{
+                name: displayName,
+                email: user?.email || session.user.email || "",
+                image: user?.image,
+                role: session.user.role,
               }}
-            >
-              <button type="submit" className="btn btn-ghost btn-sm">
-                <LogOut size={15} />
-                <span>Sign Out</span>
-              </button>
-            </form>
+            />
           </div>
         </div>
       </nav>

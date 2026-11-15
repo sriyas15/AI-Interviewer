@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { signOut } from "next-auth/react";
-import { LogOut, LayoutDashboard, User as UserIcon } from "lucide-react";
+import { LayoutDashboard } from "lucide-react";
+import { ProfileDropdown } from "@/components/auth/profile-dropdown";
 
 interface UserNavProps {
   user?: {
+    id?: string;
     name?: string | null;
     email?: string | null;
     image?: string | null;
+    role?: string;
   } | null;
 }
 
@@ -27,33 +29,16 @@ export function UserNav({ user }: UserNavProps) {
   }
 
   return (
-    <div className="nav-actions" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.875rem", color: "var(--text-secondary)" }}>
-        {user.image ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={user.image}
-            alt={user.name || "User"}
-            style={{ width: "26px", height: "26px", borderRadius: "50%", objectFit: "cover" }}
-          />
-        ) : (
-          <UserIcon size={16} />
-        )}
-        <span>{user.name?.split(" ")[0] || "Candidate"}</span>
-      </div>
+    <div
+      className="nav-actions"
+      style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}
+    >
       <Link href="/dashboard" className="btn btn-secondary btn-sm">
-        <LayoutDashboard size={16} />
+        <LayoutDashboard size={15} />
         <span>Dashboard</span>
       </Link>
-      <button
-        onClick={() => signOut({ callbackUrl: "/" })}
-        className="btn btn-ghost btn-sm"
-        title="Sign Out"
-      >
-        <LogOut size={16} />
-        <span>Sign Out</span>
-      </button>
+
+      <ProfileDropdown user={user} />
     </div>
   );
 }
-
