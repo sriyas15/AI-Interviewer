@@ -6,6 +6,8 @@ import {
   BrainCircuit,
   Plus,
   LayoutDashboard,
+  Shield,
+  ArrowRight,
 } from "lucide-react";
 import { InterviewList } from "@/components/dashboard/interview-list";
 import { StatsGrid } from "@/components/dashboard/stats-grid";
@@ -15,11 +17,23 @@ import { ProfileDropdown } from "@/components/auth/profile-dropdown";
 // This page requires auth + DB — intentionally dynamic, not statically prerendered
 export const instant = false;
 
-export default async function DashboardPage() {
+interface DashboardPageProps {
+  searchParams?: Promise<{ view?: string }>;
+}
+
+export default async function DashboardPage(props: DashboardPageProps) {
   const session = await auth();
 
   if (!session?.user?.id) {
     redirect("/login");
+  }
+
+  const searchParams = props.searchParams ? await props.searchParams : undefined;
+  const isAdmin = session.user.role === "ADMIN";
+
+  // Admins land on the Admin Workspace by default unless intentionally in preview mode
+  if (isAdmin && searchParams?.view !== "candidate") {
+    redirect("/admin");
   }
 
   // Candidate-safe query: no scores, evaluations, or reports
@@ -64,10 +78,30 @@ export default async function DashboardPage() {
             <span>AI Interviewer</span>
           </Link>
           <div className="dashboard-nav-right">
-            <div className="candidate-badge">
-              <LayoutDashboard size={13} />
-              <span>Candidate</span>
-            </div>
+            {isAdmin ? (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.375rem",
+                  padding: "0.25rem 0.625rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  backgroundColor: "rgba(245, 158, 11, 0.12)",
+                  color: "#f59e0b",
+                  border: "1px solid rgba(245, 158, 11, 0.25)",
+                }}
+              >
+                <Shield size={13} />
+                <span>Admin</span>
+              </div>
+            ) : (
+              <div className="candidate-badge">
+                <LayoutDashboard size={13} />
+                <span>Candidate</span>
+              </div>
+            )}
             <ProfileDropdown
               user={{
                 name: displayName,
@@ -81,6 +115,47 @@ export default async function DashboardPage() {
       </nav>
 
       <div className="dashboard-body">
+        {/* ─── Admin Preview Notification Banner (Visible only to Admins previewing Candidate UI) ─── */}
+        {isAdmin && (
+          <div
+            style={{
+              marginBottom: "1.5rem",
+              padding: "1rem 1.25rem",
+              borderRadius: "0.75rem",
+              backgroundColor: "rgba(245, 158, 11, 0.1)",
+              border: "1px solid rgba(245, 158, 11, 0.25)",
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+              <Shield size={18} style={{ color: "#f59e0b", flexShrink: 0 }} />
+              <span style={{ fontSize: "0.875rem", color: "#fef3c7" }}>
+                <strong>Admin Preview Mode:</strong> You are viewing the candidate practice view. Numerical scores and evaluation deep-dives are intentionally hidden here.
+              </span>
+            </div>
+            <Link
+              href="/admin"
+              className="btn btn-sm"
+              style={{
+                backgroundColor: "rgba(245, 158, 11, 0.2)",
+                color: "#fef3c7",
+                border: "1px solid rgba(245, 158, 11, 0.35)",
+                fontSize: "0.75rem",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.375rem",
+              }}
+            >
+              <span>Return to Admin Workspace</span>
+              <ArrowRight size={13} />
+            </Link>
+          </div>
+        )}
+
         {/* ─── Page Header ─── */}
         <div className="dashboard-header">
           <div>
@@ -88,7 +163,9 @@ export default async function DashboardPage() {
               Welcome back, <span className="text-gradient">{firstName}</span> 👋
             </h1>
             <p className="dashboard-subtitle">
-              Track your practice sessions and keep improving your interview skills.
+              {isAdmin
+                ? "Candidate view simulation — test questions and practice interviews."
+                : "Track your practice sessions and keep improving your interview skills."}
             </p>
           </div>
           <Link href="/interview/new" className="btn btn-primary">

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LayoutDashboard } from "lucide-react";
+import { LayoutDashboard, Shield } from "lucide-react";
 import { ProfileDropdown } from "@/components/auth/profile-dropdown";
 
 interface UserNavProps {
@@ -28,17 +28,26 @@ export function UserNav({ user }: UserNavProps) {
     );
   }
 
+  const isAdmin = user.role === "ADMIN";
+
   return (
     <div
       className="nav-actions"
       style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}
     >
-      <Link href="/dashboard" className="btn btn-secondary btn-sm">
-        <LayoutDashboard size={15} />
-        <span>Dashboard</span>
+      <Link
+        href={isAdmin ? "/admin" : "/dashboard"}
+        className="btn btn-secondary btn-sm"
+      >
+        {isAdmin ? (
+          <Shield size={15} className="text-amber-400" />
+        ) : (
+          <LayoutDashboard size={15} />
+        )}
+        <span>{isAdmin ? "Admin Portal" : "Dashboard"}</span>
       </Link>
 
-      <ProfileDropdown user={user} />
+      <ProfileDropdown user={user} showDashboardLink={true} />
     </div>
   );
 }
