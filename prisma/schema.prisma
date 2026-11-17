@@ -47,6 +47,7 @@ enum ActivityType {
   FULLSCREEN_EXIT
   WINDOW_BLUR
   SUSPICIOUS_TYPING
+  HINT_REQUESTED
 }
 
 enum InvitationStatus {
@@ -90,6 +91,7 @@ model User {
   createdQuestions     BankQuestion[]
   sentInvitations      InterviewInvitation[]
   decisionAuditLogs    DecisionAuditLog[]
+  deletionRequests     DataDeletionRequest[]
 
   @@map("users")
 }
@@ -172,6 +174,7 @@ model BankQuestion {
   starterCode    Json?        // e.g. { javascript: "...", python: "..." }
   testCases      Json?        // e.g. [{ input, expectedOutput, isHidden, explanation }]
   rubric         Json?        // Scoring criteria
+  hints          String[]     @default([])
 
   createdById    String?
   createdBy      User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
@@ -226,6 +229,11 @@ model Interview {
   humanNotes      String?           @db.Text
   reviewedAt      DateTime?
   reviewedById    String?
+
+  // Recruiter settings & assessment duration
+  durationMinutes  Int               @default(30)
+  feedbackReleased Boolean           @default(false)
+  hintsUsed        Int               @default(0)
 
   // Analytics & cost tracking
   durationSeconds Int?
@@ -285,6 +293,7 @@ model Question {
   content        String       @db.Text
   context        String?      @db.Text
   expectedTopics String[]
+  hints          String[]     @default([])
 
   createdAt      DateTime     @default(now())
 
@@ -299,13 +308,15 @@ model Question {
 
 /// The candidate's response to a question
 model Response {
-  id         String      @id @default(cuid())
-  content    String      @db.Text // The candidate's answer (text)
-  code       String?     @db.Text // Code submitted (for coding questions)
-  language   String?     // Programming language used
-  durationMs Int?        // Time taken to answer in milliseconds
+  id           String      @id @default(cuid())
+  content      String      @db.Text // The candidate's answer (text)
+  code         String?     @db.Text // Code submitted (for coding questions)
+  language     String?     // Programming language used
+  durationMs   Int?        // Time taken to answer in milliseconds
+  hintsUsed    Int         @default(0) // Number of hints used (0-3)
+  penaltyScore Float       @default(0) // Scoring penalty from hints
 
-  createdAt  DateTime    @default(now())
+  createdAt    DateTime    @default(now())
 
   // Relations
   questionId String      @unique
@@ -387,4 +398,19 @@ model ActivityEvent {
   @@index([interviewId])
   @@index([timestamp])
   @@map("activity_events")
+}
+
+/// Candidate data deletion requests (GDPR / Privacy compliance)
+model DataDeletionRequest {
+  id        String   @id @default(cuid())
+  userId    String
+  userEmail String
+  reason    String?  @db.Text
+  status    String   @default("PENDING") // PENDING, PROCESSING, COMPLETED
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("data_deletion_requests")
 }
