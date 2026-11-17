@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { InterviewReportView } from "@/components/interview/interview-report-view";
 import { toggleReleaseFeedbackAction } from "@/actions/interview";
+import { SignOutButton } from "@/components/auth/sign-out-button";
 
 export const instant = false;
 
@@ -102,8 +103,9 @@ export default async function InterviewReportPage({ params, searchParams }: Page
               )}
               <Link href="/dashboard" className="btn btn-ghost btn-sm">
                 <ArrowLeft size={16} />
-                <span>Back to Dashboard</span>
+                <span>Dashboard</span>
               </Link>
+              <SignOutButton className="btn btn-ghost btn-sm text-xs text-[var(--text-tertiary)] hover:text-[var(--color-error)]" />
             </div>
           </div>
         </nav>
@@ -202,9 +204,15 @@ export default async function InterviewReportPage({ params, searchParams }: Page
               Your responses, code submissions, and proctoring activity have been recorded and delivered to the recruitment administration team. Detailed rubrics and scoring stay admin-only until released by your recruiter.
             </div>
 
-            <Link href="/dashboard" className="btn btn-primary" style={{ width: "100%", padding: "0.75rem" }}>
-              <span>Return to Candidate Dashboard</span>
-            </Link>
+            <div className="flex flex-col sm:flex-row gap-3 w-full mt-2">
+              <SignOutButton className="btn btn-primary flex-1 justify-center py-2.5" />
+              <Link
+                href="/dashboard"
+                className="btn btn-secondary flex-1 justify-center py-2.5 text-center"
+              >
+                <span>View Candidate Dashboard</span>
+              </Link>
+            </div>
           </div>
         </div>
       </div>
