@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Play,
   RotateCcw,
@@ -70,6 +70,8 @@ export function CodeEditor({
     Array<{ input: string; expected: string; actual: string; passed: boolean }>
   >([]);
 
+  const gutterRef = useRef<HTMLDivElement>(null);
+
   // Handle Tab key to insert 2 spaces
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab") {
@@ -95,7 +97,7 @@ export function CodeEditor({
 
     try {
       if (language !== "javascript" && language !== "typescript") {
-        const msg = `[Language Preview: ${language}]\nSyntax accepted. Server-side test runner and AI will evaluate your ${language} solution upon submission.`;
+        const msg = `[Language Preview: ${language}]\nSyntax accepted. Server-side test runner and AI will evaluate your ${language} solution upon submission.\n(Tip: Switch to JavaScript/TypeScript to test your functions interactively in this browser sandbox.)`;
         setOutput(msg);
         setExecutionTime(Math.round(performance.now() - startTime));
         setIsRunning(false);
@@ -103,17 +105,39 @@ export function CodeEditor({
       }
 
       if (typeof window === "undefined" || typeof Worker === "undefined") {
-        setOutput("Web Worker environment not available.");
+        setOutput("Web Worker environment not available in this browser.");
         setHasError(true);
         setIsRunning(false);
         return;
+      }
+
+      // Pre-process TypeScript type annotations to run smoothly in standard JavaScript engine
+      let executableCode = value;
+      if (language === "typescript") {
+        executableCode = executableCode
+          .replace(/(?:interface|type)\s+[A-Za-z0-9_$]+(?:\s*<[^>]+>)?\s*(?:=\s*[^;]+;|{[^}]*})/g, "")
+          .replace(/:\s*[A-Za-z0-9_$]+(?:\[\])?(?=[,\)])/g, "")
+          .replace(/\):\s*[A-Za-z0-9_$]+(?:\[\])?\s*\{/g, ") {");
+      }
+
+      // Extract candidate function declarations
+      const fnRegex = /(?:function\s+([a-zA-Z0-9_$]+)|(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(?:function|\([^)]*\)\s*=>|[a-zA-Z0-9_$]+\s*=>))/g;
+      const candidateNames: string[] = [];
+      let match;
+      while ((match = fnRegex.exec(executableCode)) !== null) {
+        const name = match[1] || match[2];
+        if (name && !candidateNames.includes(name)) {
+          candidateNames.push(name);
+        }
       }
 
       const workerCode = `
         self.onmessage = function(e) {
           var code = e.data.code;
           var testCases = e.data.testCases || [];
+          var candidateNames = e.data.candidateNames || [];
           var logs = [];
+
           var customConsole = {
             log: function() {
               var args = Array.prototype.slice.call(arguments);
@@ -129,77 +153,118 @@ export function CodeEditor({
             }
           };
 
-          try {
-            // 1. Initial code execution to detect syntax errors and capture top-level console output
-            var runner = new Function(
-              'console', 'window', 'document', 'localStorage', 'sessionStorage', 'fetch', 'XMLHttpRequest', 'WebSocket', 'importScripts',
-              '"use strict"; ' + code
-            );
-            var result = runner(customConsole, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined);
-            if (result !== undefined) {
-              logs.push('=> Returned: ' + (typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)));
+          function deepEqual(actual, expected) {
+            if (actual === expected) return true;
+            if (actual === undefined && (expected === "undefined" || expected === undefined)) return true;
+            if (actual === null && (expected === "null" || expected === null)) return true;
+
+            var actualStr = actual === undefined ? "undefined" : (typeof actual === "object" ? JSON.stringify(actual) : String(actual));
+            var normActual = actualStr.trim().replace(/\\s+/g, '');
+            var normExpected = String(expected).trim().replace(/\\s+/g, '');
+
+            if (normActual === normExpected) return true;
+
+            if ((actual === true || actual === false) && normActual.toLowerCase() === normExpected.toLowerCase()) return true;
+
+            var numActual = Number(actual);
+            var numExpected = Number(expected);
+            if (!isNaN(numActual) && !isNaN(numExpected) && Math.abs(numActual - numExpected) < 1e-6) {
+              return true;
             }
 
-            // 2. Real test case evaluation against candidate's functions
+            try {
+              var pActual = typeof actual === 'object' ? actual : JSON.parse(normActual);
+              var pExpected = JSON.parse(normExpected);
+              return JSON.stringify(pActual) === JSON.stringify(pExpected);
+            } catch(e) {}
+
+            return false;
+          }
+
+          try {
+            // Execute candidate code and resolve entry function
+            var runner = new Function(
+              'customConsole',
+              'var console = customConsole;\\n' +
+              code + '\\n' +
+              'var names = ' + JSON.stringify(candidateNames) + '.concat(["twoSum", "solution", "solve", "debounce", "isValid", "mergeIntervals", "findMedianSortedArrays"]);\\n' +
+              'for (var i = 0; i < names.length; i++) {\\n' +
+              '  try {\\n' +
+              '    var f = eval(names[i]);\\n' +
+              '    if (typeof f === "function") return f;\\n' +
+              '  } catch(e) {}\\n' +
+              '}\\n' +
+              'return null;\\n'
+            );
+
+            var entryFn = runner(customConsole);
+
             var testResults = [];
             if (testCases && testCases.length > 0) {
-              for (var i = 0; i < testCases.length; i++) {
-                var tc = testCases[i];
-                try {
-                  var testRunner = new Function(
-                    'console', 'tcInput',
-                    '"use strict"; ' +
-                    code + '\\n' +
-                    'var entryFn = null;\\n' +
-                    'var knownNames = ["twoSum", "debounce", "solution", "solve", "mergeIntervals", "findMedianSortedArrays", "isValid"];\\n' +
-                    'for (var k = 0; k < knownNames.length; k++) {\\n' +
-                    '  try { if (eval("typeof " + knownNames[k]) === "function") { entryFn = eval(knownNames[k]); break; } } catch(ignore) {}\\n' +
-                    '}\\n' +
-                    'if (!entryFn) {\\n' +
-                    '  try {\\n' +
-                    '    var names = Object.getOwnPropertyNames(this);\\n' +
-                    '    for (var n = 0; n < names.length; n++) {\\n' +
-                    '      if (typeof this[names[n]] === "function" && names[n] !== "eval") { entryFn = this[names[n]]; break; }\\n' +
-                    '    }\\n' +
-                    '  } catch(e) {}\\n' +
-                    '}\\n' +
-                    'if (entryFn) {\\n' +
-                    '  var args;\\n' +
-                    '  try { args = eval("[" + tcInput + "]"); } catch(e) { args = [tcInput]; }\\n' +
-                    '  return entryFn.apply(null, args);\\n' +
-                    '} else {\\n' +
-                    '  return eval(tcInput);\\n' +
-                    '}\\n'
-                  );
-
-                  var actual = testRunner(customConsole, tc.input);
-                  var actualStr = actual === undefined ? "undefined" : (typeof actual === "object" ? JSON.stringify(actual) : String(actual));
-                  var expectedNorm = String(tc.expectedOutput).trim().replace(/\\s+/g, "");
-                  var actualNorm = actualStr.trim().replace(/\\s+/g, "");
-                  var passed = (actualNorm === expectedNorm);
-
+              if (!entryFn) {
+                logs.push("Note: No callable function was detected in your code. Please define a function (e.g. function solution(...) { ... }) to run against test cases.");
+                for (var t = 0; t < testCases.length; t++) {
                   testResults.push({
-                    input: tc.input,
-                    expected: tc.expectedOutput,
-                    actual: actualStr,
-                    passed: passed,
-                    isHidden: !!tc.isHidden,
-                  });
-                } catch (tcErr) {
-                  testResults.push({
-                    input: tc.input,
-                    expected: tc.expectedOutput,
-                    actual: "Error: " + tcErr.message,
+                    input: testCases[t].input,
+                    expected: testCases[t].expectedOutput,
+                    actual: "No function found",
                     passed: false,
-                    isHidden: !!tc.isHidden,
+                    isHidden: !!testCases[t].isHidden
                   });
+                }
+              } else {
+                for (var i = 0; i < testCases.length; i++) {
+                  var tc = testCases[i];
+                  try {
+                    var args;
+                    try {
+                      args = eval('[' + tc.input + ']');
+                    } catch(e1) {
+                      try {
+                        args = [JSON.parse(tc.input)];
+                      } catch(e2) {
+                        args = [tc.input];
+                      }
+                    }
+                    if (!Array.isArray(args)) {
+                      args = [args];
+                    }
+
+                    var actual = entryFn.apply(null, args);
+                    var actualStr = actual === undefined ? "undefined" : (typeof actual === "object" ? JSON.stringify(actual) : String(actual));
+                    var passed = deepEqual(actual, tc.expectedOutput);
+
+                    testResults.push({
+                      input: tc.input,
+                      expected: tc.expectedOutput,
+                      actual: actualStr,
+                      passed: passed,
+                      isHidden: !!tc.isHidden
+                    });
+                  } catch(tcErr) {
+                    testResults.push({
+                      input: tc.input,
+                      expected: tc.expectedOutput,
+                      actual: "Error: " + tcErr.message,
+                      passed: false,
+                      isHidden: !!tc.isHidden
+                    });
+                  }
                 }
               }
             }
 
-            self.postMessage({ success: true, logs: logs, result: result, testResults: testResults });
+            self.postMessage({
+              success: true,
+              logs: logs,
+              testResults: testResults
+            });
           } catch (err) {
-            self.postMessage({ success: false, error: err.message, logs: logs });
+            self.postMessage({
+              success: false,
+              error: err.message,
+              logs: logs
+            });
           }
         };
       `;
@@ -299,7 +364,11 @@ export function CodeEditor({
         setIsRunning(false);
       };
 
-      worker.postMessage({ code: value, testCases: sampleTestCases });
+      worker.postMessage({
+        code: executableCode,
+        testCases: sampleTestCases,
+        candidateNames: candidateNames,
+      });
     } catch (err: any) {
       const elapsed = Math.round(performance.now() - startTime);
       setExecutionTime(elapsed);
@@ -309,7 +378,7 @@ export function CodeEditor({
     }
   };
 
-  const lineCount = Math.max(8, value.split("\n").length);
+  const lineCount = Math.max(12, value.split("\n").length);
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
 
   return (
@@ -365,32 +434,43 @@ export function CodeEditor({
         </div>
       </div>
 
-      {/* Code Textarea & Gutter */}
-      <div className="flex relative font-mono text-xs overflow-x-auto min-h-[200px] max-h-[340px]">
+      {/* Code Textarea & Gutter with Synchronized Scrolling and Strict Alignment */}
+      <div className="flex relative font-mono text-xs overflow-hidden min-h-[220px] max-h-[380px]">
         {/* Line Numbers Gutter */}
         <div
-          className="py-3 px-3 select-none text-right text-[var(--text-tertiary)] bg-[var(--bg-secondary)] border-r border-[var(--surface-border)] shrink-0 min-w-[42px]"
+          ref={gutterRef}
+          className="py-3 px-3 select-none text-right text-[var(--text-tertiary)] bg-[var(--bg-secondary)] border-r border-[var(--surface-border)] shrink-0 min-w-[44px] overflow-hidden font-mono text-xs"
           aria-hidden="true"
         >
           {lineNumbers.map((num) => (
-            <div key={num} className="leading-5 h-5">
+            <div key={num} className="leading-[20px] h-[20px]">
               {num}
             </div>
           ))}
         </div>
 
         {/* Text Area */}
-        <div className="relative flex-1">
+        <div className="relative flex-1 overflow-hidden">
           <textarea
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
+            onScroll={(e) => {
+              if (gutterRef.current) {
+                gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+              }
+            }}
+            wrap="off"
             spellCheck="false"
             autoCapitalize="off"
             autoComplete="off"
             autoCorrect="off"
-            placeholder="// Write your solution here...&#10;function solution(args) {&#10;  // Your logic&#10;  return result;&#10;}"
-            className="w-full h-full p-3 bg-transparent text-[var(--text-primary)] leading-5 resize-none border-none outline-none font-mono whitespace-pre overflow-auto"
+            placeholder={
+              language === "python"
+                ? "# Write your solution here...\ndef solution(nums, target):\n    # Your logic\n    return result"
+                : "// Write your solution here...\nfunction twoSum(nums, target) {\n  // Your logic\n  return [0, 1];\n}"
+            }
+            className="w-full h-full py-3 px-3 bg-transparent text-[var(--text-primary)] leading-[20px] resize-none border-none outline-none font-mono text-xs whitespace-pre overflow-auto"
             style={{ tabSize: 2 }}
           />
         </div>
