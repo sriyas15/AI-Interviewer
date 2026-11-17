@@ -39,6 +39,7 @@ interface GenerateReportParams {
     jobRole: string;
     difficulty: Difficulty;
     topics: string[];
+    rubricWeights?: Record<string, number> | null;
   };
   questionsWithResponses: Array<{
     content: string;
@@ -60,7 +61,19 @@ interface GenerateReportParams {
 // Unified LLM Caller (Gemini API -> OpenAI API -> Smart Fallback)
 // ─────────────────────────────────────────────────────────────
 
-async function callLLM(systemPrompt: string, userPrompt: string): Promise<string | null> {
+export interface LLMCallResult {
+  text: string;
+  modelName: string;
+  promptVersion: string;
+  tokens: { prompt: number; completion: number; total: number };
+  estimatedCost: number;
+}
+
+async function callLLM(
+  systemPrompt: string,
+  userPrompt: string,
+  temperature: number = 0.2
+): Promise<LLMCallResult | null> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
 
@@ -83,7 +96,7 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
           ],
           generationConfig: {
             responseMimeType: "application/json",
-            temperature: 0.7,
+            temperature,
           },
         }),
       });
@@ -91,7 +104,19 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
       if (res.ok) {
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return text;
+        if (text) {
+          const promptTokens = data?.usageMetadata?.promptTokenCount || 350;
+          const candidatesTokens = data?.usageMetadata?.candidatesTokenCount || 200;
+          const totalTokens = data?.usageMetadata?.totalTokenCount || (promptTokens + candidatesTokens);
+          const cost = Number(((promptTokens * 0.075 + candidatesTokens * 0.3) / 1000000).toFixed(6));
+          return {
+            text,
+            modelName: "gemini-1.5-flash",
+            promptVersion: "v2.1",
+            tokens: { prompt: promptTokens, completion: candidatesTokens, total: totalTokens },
+            estimatedCost: cost,
+          };
+        }
       } else {
         console.warn("[AI_SERVICE] Gemini API returned error status:", res.status);
       }
@@ -116,14 +141,26 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
             { role: "user", content: userPrompt },
           ],
           response_format: { type: "json_object" },
-          temperature: 0.7,
+          temperature,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
         const text = data?.choices?.[0]?.message?.content;
-        if (text) return text;
+        if (text) {
+          const promptTokens = data?.usage?.prompt_tokens || 350;
+          const completionTokens = data?.usage?.completion_tokens || 200;
+          const totalTokens = data?.usage?.total_tokens || (promptTokens + completionTokens);
+          const cost = Number(((promptTokens * 0.15 + completionTokens * 0.6) / 1000000).toFixed(6));
+          return {
+            text,
+            modelName: "gpt-4o-mini",
+            promptVersion: "v2.1",
+            tokens: { prompt: promptTokens, completion: completionTokens, total: totalTokens },
+            estimatedCost: cost,
+          };
+        }
       } else {
         console.warn("[AI_SERVICE] OpenAI API returned error status:", res.status);
       }
@@ -180,11 +217,11 @@ Respond strictly with a JSON object matching this schema:
 }
 `;
 
-  const rawJson = await callLLM(QUESTION_GENERATION_SYSTEM_PROMPT, userPrompt);
+  const llmResult = await callLLM(QUESTION_GENERATION_SYSTEM_PROMPT, userPrompt, 0.4);
 
-  if (rawJson) {
+  if (llmResult?.text) {
     try {
-      const parsed = JSON.parse(rawJson);
+      const parsed = JSON.parse(llmResult.text);
       const validated = questionGenerationSchema.safeParse(parsed);
       if (validated.success) {
         return validated.data;
@@ -238,11 +275,11 @@ Return a JSON object matching this schema:
 }
 `;
 
-  const rawJson = await callLLM(ANSWER_EVALUATION_SYSTEM_PROMPT, userPrompt);
+  const llmResult = await callLLM(ANSWER_EVALUATION_SYSTEM_PROMPT, userPrompt, 0.2);
 
-  if (rawJson) {
+  if (llmResult?.text) {
     try {
-      const parsed = JSON.parse(rawJson);
+      const parsed = JSON.parse(llmResult.text);
       const validated = evaluationSchema.safeParse(parsed);
       if (validated.success) {
         // Enforce strict numerical bounds [0.0, 10.0]
@@ -250,6 +287,10 @@ Return a JSON object matching this schema:
         return {
           ...validated.data,
           score: boundedScore,
+          modelName: llmResult.modelName,
+          promptVersion: llmResult.promptVersion,
+          tokenCount: llmResult.tokens.total,
+          estimatedCost: llmResult.estimatedCost,
         };
       }
     } catch {
@@ -257,7 +298,7 @@ Return a JSON object matching this schema:
     }
   }
 
-  // Fallback Evaluation
+  // Fallback Evaluation (Explicit heuristic indicator when keys are not configured, Item 6)
   const wordCount = responseContent.trim().split(/\s+/).length;
   let baseScore = Math.min(8.5, Math.max(3.0, wordCount / 15));
   if (code && code.length > 30) baseScore = Math.min(9.5, baseScore + 1.5);
@@ -266,8 +307,8 @@ Return a JSON object matching this schema:
     score: Number(baseScore.toFixed(1)),
     feedback:
       wordCount > 40
-        ? "Good explanation covering the core mechanics. Solid technical awareness of the principles involved."
-        : "A brief answer that touches on the fundamental concept, but would benefit from more concrete real-world examples and trade-off considerations.",
+        ? "[Heuristic Fallback: Evaluation API key not configured] Good explanation covering the core mechanics. Solid technical awareness of the principles involved."
+        : "[Heuristic Fallback: Evaluation API key not configured] A brief answer that touches on the fundamental concept, but would benefit from more concrete real-world examples and trade-off considerations.",
     strengths: [
       "Directly addressed the question prompt",
       "Demonstrated familiarity with key terminology",
@@ -278,6 +319,10 @@ Return a JSON object matching this schema:
       "Could mention alternative architectural trade-offs",
     ],
     shouldFollowUp: false,
+    modelName: "heuristic-fallback",
+    promptVersion: "v1.0-heuristic",
+    tokenCount: 0,
+    estimatedCost: 0,
   };
 }
 
@@ -331,23 +376,44 @@ Return a JSON object matching this schema:
 }
 `;
 
-  const rawJson = await callLLM(REPORT_GENERATION_SYSTEM_PROMPT, userPrompt);
+  const llmResult = await callLLM(REPORT_GENERATION_SYSTEM_PROMPT, userPrompt, 0.2);
 
-  if (rawJson) {
+  if (llmResult?.text) {
     try {
-      const parsed = JSON.parse(rawJson);
+      const parsed = JSON.parse(llmResult.text);
       const validated = reportSchema.safeParse(parsed);
       if (validated.success) {
+        const tScore = Math.max(0, Math.min(100, Math.round(validated.data.technicalScore)));
+        const cScore = Math.max(0, Math.min(100, Math.round(validated.data.communicationScore)));
+        const pScore = Math.max(0, Math.min(100, Math.round(validated.data.problemSolvingScore)));
+        const qScore =
+          validated.data.codeQualityScore !== undefined
+            ? Math.max(0, Math.min(100, Math.round(validated.data.codeQualityScore)))
+            : undefined;
+
+        // Apply template rubric weights if present (Item 7)
+        let computedOverall = Math.max(0, Math.min(100, Math.round(validated.data.overallScore)));
+        const weights = interview.rubricWeights as Record<string, number> | undefined;
+        if (weights && typeof weights === "object") {
+          const wTech = (weights.technical ?? 40) / 100;
+          const wPS = (weights.problemSolving ?? 30) / 100;
+          const wComm = (weights.communication ?? 20) / 100;
+          const wCode = (weights.codeQuality ?? 10) / 100;
+          const denom = (wTech + wPS + wComm + wCode) || 1;
+          computedOverall = Math.round((tScore * wTech + pScore * wPS + cScore * wComm + (qScore ?? tScore) * wCode) / denom);
+        }
+
         return {
           ...validated.data,
-          overallScore: Math.max(0, Math.min(100, Math.round(validated.data.overallScore))),
-          technicalScore: Math.max(0, Math.min(100, Math.round(validated.data.technicalScore))),
-          communicationScore: Math.max(0, Math.min(100, Math.round(validated.data.communicationScore))),
-          problemSolvingScore: Math.max(0, Math.min(100, Math.round(validated.data.problemSolvingScore))),
-          codeQualityScore:
-            validated.data.codeQualityScore !== undefined
-              ? Math.max(0, Math.min(100, Math.round(validated.data.codeQualityScore)))
-              : undefined,
+          overallScore: computedOverall,
+          technicalScore: tScore,
+          communicationScore: cScore,
+          problemSolvingScore: pScore,
+          codeQualityScore: qScore,
+          modelName: llmResult.modelName,
+          promptVersion: llmResult.promptVersion,
+          tokenCount: llmResult.tokens.total,
+          estimatedCost: llmResult.estimatedCost,
         };
       }
     } catch {
@@ -355,22 +421,38 @@ Return a JSON object matching this schema:
     }
   }
 
-  // Fallback Report Synthesis
+  // Fallback Report Synthesis with rubric formula (Item 6 & 7)
   const techScore = Math.min(100, Math.max(50, averageScore + 2));
   const commScore = Math.min(100, Math.max(50, averageScore - 1));
   const psScore = Math.min(100, Math.max(50, averageScore + 1));
+  const codeScore = 80;
+
+  let finalOverall = averageScore;
+  const weights = interview.rubricWeights as Record<string, number> | undefined;
+  if (weights && typeof weights === "object") {
+    const wTech = (weights.technical ?? 40) / 100;
+    const wPS = (weights.problemSolving ?? 30) / 100;
+    const wComm = (weights.communication ?? 20) / 100;
+    const wCode = (weights.codeQuality ?? 10) / 100;
+    const denom = (wTech + wPS + wComm + wCode) || 1;
+    finalOverall = Math.round((techScore * wTech + psScore * wPS + commScore * wComm + codeScore * wCode) / denom);
+  }
 
   return {
-    overallScore: averageScore,
-    summary: `The candidate demonstrated strong foundational knowledge for the ${interview.jobRole} position, performing well in conceptual discussions and demonstrating a structured approach to problem solving under ${interview.difficulty.toLowerCase()} conditions.`,
+    overallScore: finalOverall,
+    summary: `[Heuristic Assessment Summary] The candidate demonstrated foundational knowledge for the ${interview.jobRole} position, performing solidly across technical discussions with a structured approach under ${interview.difficulty.toLowerCase()} parameters.`,
     technicalScore: techScore,
     communicationScore: commScore,
     problemSolvingScore: psScore,
-    codeQualityScore: 80,
+    codeQualityScore: codeScore,
+    modelName: "heuristic-fallback",
+    promptVersion: "v1.0-heuristic",
+    tokenCount: 0,
+    estimatedCost: 0,
     strengths: [
-      "Demonstrated good command over core language concepts and design fundamentals.",
-      "Clear articulation of thought process during technical explanations.",
-      "Strong understanding of modern web engineering practices and architecture.",
+      "Demonstrated familiarity with core language concepts and design fundamentals.",
+      "Articulated solution steps during technical explanation.",
+      "Addressed fundamental constraints for modern software engineering.",
     ],
     weaknesses: [
       "Could spend more time analyzing edge cases and failure modes upfront.",
@@ -381,6 +463,7 @@ Return a JSON object matching this schema:
       "Review concurrency, caching invalidation patterns, and distributed system trade-offs.",
       "In coding questions, articulate time/space complexity before writing implementation details.",
     ],
+  };
   };
 }
 
