@@ -294,6 +294,8 @@ model Question {
   context        String?      @db.Text
   expectedTopics String[]
   hints          String[]     @default([])
+  starterCode    Json?        // e.g. { javascript: "..." }
+  testCases      Json?        // e.g. [{ input, expectedOutput, isHidden, explanation }]
 
   createdAt      DateTime     @default(now())
 
@@ -302,6 +304,7 @@ model Question {
   interview      Interview    @relation(fields: [interviewId], references: [id], onDelete: Cascade)
   response       Response?
 
+  @@unique([interviewId, orderIndex])
   @@index([interviewId])
   @@map("questions")
 }
@@ -322,8 +325,23 @@ model Response {
   questionId String      @unique
   question   Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
   evaluation Evaluation?
+  followUps  FollowUp[]
 
   @@map("responses")
+}
+
+/// Follow-up question turns for an interview response
+model FollowUp {
+  id         String   @id @default(cuid())
+  prompt     String   @db.Text
+  answer     String   @db.Text
+  createdAt  DateTime @default(now())
+
+  responseId String
+  response   Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  @@index([responseId])
+  @@map("follow_ups")
 }
 
 /// AI evaluation of a candidate's response
