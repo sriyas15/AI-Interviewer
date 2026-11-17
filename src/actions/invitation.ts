@@ -56,32 +56,21 @@ export async function startInvitedInterviewAction(token: string) {
     return { success: false, error: "This interview has already been completed." };
   }
 
+  // If candidate is already signed in, ensure the invited email matches
+  if (session?.user?.email) {
+    const sessionEmail = session.user.email.toLowerCase().trim();
+    const candidateEmail = invitation.candidateEmail.toLowerCase().trim();
+    if (sessionEmail !== candidateEmail) {
+      return {
+        success: false,
+        error: `This invitation was issued to ${invitation.candidateEmail}. You are currently signed in as ${session.user.email}. Please switch accounts or log out to continue.`,
+      };
+    }
+  }
+
   // If already started and has interviewId, redirect directly
   if (invitation.status === InvitationStatus.STARTED && invitation.interviewId) {
     return { success: true, interviewId: invitation.interviewId };
-  }
-
-  // Determine user ID
-  let userId = session?.user?.id;
-
-  // If candidate is not signed in, look up or create an account matching invitation.candidateEmail
-  if (!userId) {
-    let candidateUser = await db.user.findUnique({
-      where: { email: invitation.candidateEmail.toLowerCase().trim() },
-    });
-
-    if (!candidateUser) {
-      candidateUser = await db.user.create({
-        data: {
-          email: invitation.candidateEmail.toLowerCase().trim(),
-          name: invitation.candidateName || "Candidate",
-          role: Role.CANDIDATE,
-          emailVerified: new Date(),
-        },
-      });
-    }
-
-    userId = candidateUser.id;
   }
 
   // Fetch bank questions filtered by role, difficulty, or tags, and randomly sample them
@@ -124,6 +113,7 @@ export async function startInvitedInterviewAction(token: string) {
     expectedTopics: string[];
     context?: string | null;
     hints: string[];
+    testCases?: any;
   }> = [];
 
   if (sampledBankQuestions.length > 0) {
@@ -133,6 +123,7 @@ export async function startInvitedInterviewAction(token: string) {
       content: bq.content,
       context: bq.sampleCode || null,
       expectedTopics: bq.expectedTopics,
+      testCases: bq.testCases ?? undefined,
       hints: bq.hints && bq.hints.length > 0
         ? bq.hints
         : [
@@ -142,7 +133,7 @@ export async function startInvitedInterviewAction(token: string) {
           ],
     }));
   } else {
-    // Role-tailored default curriculum with specific hints per question
+    // Role-tailored default curriculum with specific hints and test cases per question
     starterQuestions = [
       {
         orderIndex: 1,
@@ -160,6 +151,10 @@ export async function startInvitedInterviewAction(token: string) {
         type: "CODING",
         content: "Write a function that debounces asynchronous operations and handles cancellations gracefully.",
         expectedTopics: ["Debounce", "Closures", "Async/Await"],
+        testCases: [
+          { input: "100", expectedOutput: "true", isHidden: false, explanation: "Basic debounce execution" },
+          { input: "50", expectedOutput: "true", isHidden: false, explanation: "Cancellation before invocation" }
+        ],
         hints: [
           `Use a closure to capture and clear the active timeout timer.`,
           `Attach a .cancel() method directly onto the returned debounced function.`,
@@ -180,41 +175,95 @@ export async function startInvitedInterviewAction(token: string) {
     ];
   }
 
-  // Create the tailored Interview session with duration and hints
-  const interview = await db.interview.create({
-    data: {
-      userId,
-      title: invitation.template?.title || `${invitation.jobRole} Assessment`,
-      jobRole: invitation.jobRole,
-      difficulty: invitation.difficulty,
-      topics: [invitation.jobRole, "Core Competencies", "Problem Solving"],
-      status: InterviewStatus.IN_PROGRESS,
-      startedAt: new Date(),
-      durationMinutes: invitation.template?.duration || 30,
-      feedbackReleased: false,
-      templateId: invitation.templateId || null,
-      questions: {
-        create: starterQuestions.map((q) => ({
-          orderIndex: q.orderIndex,
-          type: q.type,
-          content: q.content,
-          context: q.context || null,
-          expectedTopics: q.expectedTopics,
-          hints: q.hints,
-        })),
-      },
-    },
-  });
+  // Atomically claim the invitation and initialize the interview session
+  try {
+    const claimResult = await db.$transaction(async (tx) => {
+      // Re-read inside transaction to prevent race conditions
+      const freshInvite = await tx.interviewInvitation.findUnique({
+        where: { id: invitation.id },
+        include: { template: true },
+      });
 
-  // Link invitation to the newly created interview
-  await db.interviewInvitation.update({
-    where: { id: invitation.id },
-    data: {
-      status: InvitationStatus.STARTED,
-      interviewId: interview.id,
-    },
-  });
+      if (!freshInvite) {
+        throw new Error("Invitation not found.");
+      }
 
-  return { success: true, interviewId: interview.id };
+      if (freshInvite.status === InvitationStatus.EXPIRED || new Date() > freshInvite.expiresAt) {
+        throw new Error("This invitation link has expired.");
+      }
+
+      if (freshInvite.status === InvitationStatus.REVOKED) {
+        throw new Error("This invitation has been revoked.");
+      }
+
+      if (freshInvite.status === InvitationStatus.COMPLETED) {
+        throw new Error("This interview has already been completed.");
+      }
+
+      if (freshInvite.status === InvitationStatus.STARTED && freshInvite.interviewId) {
+        return { interviewId: freshInvite.interviewId };
+      }
+
+      // Determine or create candidate user within the transaction
+      let candidateUserId = session?.user?.id;
+      if (!candidateUserId) {
+        const candidateUser = await tx.user.upsert({
+          where: { email: freshInvite.candidateEmail.toLowerCase().trim() },
+          update: {},
+          create: {
+            email: freshInvite.candidateEmail.toLowerCase().trim(),
+            name: freshInvite.candidateName || "Candidate",
+            role: Role.CANDIDATE,
+            emailVerified: new Date(),
+            isActive: true,
+          },
+        });
+        candidateUserId = candidateUser.id;
+      }
+
+      // Create the tailored Interview session with duration, hints, and testCases
+      const interview = await tx.interview.create({
+        data: {
+          userId: candidateUserId,
+          title: freshInvite.template?.title || `${freshInvite.jobRole} Assessment`,
+          jobRole: freshInvite.jobRole,
+          difficulty: freshInvite.difficulty,
+          topics: [freshInvite.jobRole, "Core Competencies", "Problem Solving"],
+          status: InterviewStatus.IN_PROGRESS,
+          startedAt: new Date(),
+          durationMinutes: freshInvite.template?.duration || 30,
+          feedbackReleased: false,
+          templateId: freshInvite.templateId || null,
+          questions: {
+            create: starterQuestions.map((q) => ({
+              orderIndex: q.orderIndex,
+              type: q.type,
+              content: q.content,
+              context: q.context || null,
+              expectedTopics: q.expectedTopics,
+              hints: q.hints,
+              testCases: q.testCases ?? undefined,
+            })),
+          },
+        },
+      });
+
+      // Link invitation to the newly created interview
+      await tx.interviewInvitation.update({
+        where: { id: freshInvite.id },
+        data: {
+          status: InvitationStatus.STARTED,
+          interviewId: interview.id,
+        },
+      });
+
+      return { interviewId: interview.id };
+    });
+
+    return { success: true, interviewId: claimResult.interviewId };
+  } catch (txError: any) {
+    console.error("Atomic invite claim error:", txError);
+    return { success: false, error: txError.message || "Failed to initialize interview session." };
+  }
 }
 
