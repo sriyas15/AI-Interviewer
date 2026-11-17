@@ -153,6 +153,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         setTotalQuestions(res.totalQuestions || 5);
         setAiStatus("speaking");
 
+        let hasDraftCode = false;
         // Restore autosaved draft if exists (C3)
         try {
           const savedDraft = localStorage.getItem(getDraftKey(res.question.id));
@@ -160,13 +161,34 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
             const parsed = JSON.parse(savedDraft);
             if (parsed.answerText || parsed.codeText) {
               setAnswerText(parsed.answerText || "");
-              setCodeText(parsed.codeText || "");
+              if (parsed.codeText) {
+                setCodeText(parsed.codeText);
+                hasDraftCode = true;
+              }
               setDraftRestored(true);
               setTimeout(() => setDraftRestored(false), 3500);
             }
           }
         } catch {
           // ignore draft read errors
+        }
+
+        // Provide starter template if question is CODING and has no saved draft
+        if (!hasDraftCode && res.question.type === "CODING") {
+          const contentLower = res.question.content.toLowerCase();
+          if (contentLower.includes("two sum") || contentLower.includes("target")) {
+            setCodeText(
+              codeLanguage === "python"
+                ? "def twoSum(nums, target):\n    # Write your solution here\n    pass\n"
+                : "function twoSum(nums, target) {\n  // Write your solution here\n  \n}\n"
+            );
+          } else {
+            setCodeText(
+              codeLanguage === "python"
+                ? "def solution(*args):\n    # Write your solution here\n    pass\n"
+                : "function solution(...args) {\n  // Write your solution here\n  \n}\n"
+            );
+          }
         }
       }
     } catch {
@@ -475,13 +497,17 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
 
           {/* Revealed Hints Box (C5) */}
           {revealedHints.length > 0 && (
-            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-2 text-xs text-amber-200">
+            <div
+              className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-2 text-xs text-amber-200 select-none"
+              style={{ userSelect: "none", WebkitUserSelect: "none" }}
+              onCopy={(e) => e.preventDefault()}
+            >
               <div className="font-semibold flex items-center gap-1.5 text-amber-300">
                 <Lightbulb size={13} />
                 <span>Unlocked Guidance:</span>
               </div>
               {revealedHints.map((hint, hIdx) => (
-                <p key={hIdx} className="text-[11px] leading-relaxed">
+                <p key={hIdx} className="text-[11px] leading-relaxed select-none">
                   {hint}
                 </p>
               ))}
@@ -503,12 +529,26 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
             </div>
           ) : currentQuestion ? (
             <>
-              {/* Question Card (C7: Clean question view with NO leaked rubric/expected focus) */}
-              <div className="card-glass p-6 md:p-8 rounded-2xl border border-[var(--surface-border)] shadow-xl space-y-4">
+              {/* Question Card (C7: Clean question view with NO leaked rubric/expected focus; Anti-Copy Protected) */}
+              <div
+                className="card-glass p-6 md:p-8 rounded-2xl border border-[var(--surface-border)] shadow-xl space-y-4 select-none"
+                style={{ userSelect: "none", WebkitUserSelect: "none" }}
+                onCopy={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onCut={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                }}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span
-                      className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider"
+                      className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider select-none"
                       style={{
                         color: getQuestionTypeLabel(currentQuestion.type).color,
                         backgroundColor: "var(--bg-tertiary)",
@@ -517,35 +557,47 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
                     >
                       {getQuestionTypeLabel(currentQuestion.type).label}
                     </span>
-                    <span className="text-xs text-[var(--text-tertiary)]">
+                    <span className="text-xs text-[var(--text-tertiary)] select-none">
                       Question #{currentQuestion.orderIndex}
                     </span>
                   </div>
                 </div>
 
-                {/* Primary Question Text */}
-                <h2 className="text-xl md:text-2xl font-bold leading-relaxed tracking-tight text-[var(--text-primary)]">
+                {/* Primary Question Text (Protected from clipboard copy / dragging) */}
+                <h2
+                  className="text-xl md:text-2xl font-bold leading-relaxed tracking-tight text-[var(--text-primary)] select-none"
+                  style={{ userSelect: "none", WebkitUserSelect: "none" }}
+                >
                   {currentQuestion.content}
                 </h2>
 
                 {/* Additional Context or Code Snippet */}
                 {currentQuestion.context && (
-                  <div className="p-3.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--surface-border)] text-xs text-[var(--text-secondary)] font-mono whitespace-pre-wrap">
+                  <div
+                    className="p-3.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--surface-border)] text-xs text-[var(--text-secondary)] font-mono whitespace-pre-wrap select-none"
+                    style={{ userSelect: "none", WebkitUserSelect: "none" }}
+                    onCopy={(e) => e.preventDefault()}
+                  >
                     {currentQuestion.context}
                   </div>
                 )}
 
                 {/* Follow-up Question Callout (C2: State Machine Follow-Up Active) */}
                 {activeFollowUpPrompt && (
-                  <div className="p-4 rounded-xl bg-purple-500/15 border border-purple-500/35 space-y-1.5 animate-slide-up">
+                  <div
+                    className="p-4 rounded-xl bg-purple-500/15 border border-purple-500/35 space-y-1.5 animate-slide-up select-none"
+                    style={{ userSelect: "none", WebkitUserSelect: "none" }}
+                    onCopy={(e) => e.preventDefault()}
+                    onContextMenu={(e) => e.preventDefault()}
+                  >
                     <div className="flex items-center gap-1.5 text-xs font-bold text-purple-300">
                       <Sparkles size={13} className="text-purple-400" />
                       <span>AI Follow-Up Inquiry (Follow-up {followUpCount} of 2)</span>
                     </div>
-                    <p className="text-sm font-semibold text-[var(--text-primary)]">
+                    <p className="text-sm font-semibold text-[var(--text-primary)] select-none">
                       {activeFollowUpPrompt}
                     </p>
-                    <p className="text-[11px] text-[var(--text-secondary)]">
+                    <p className="text-[11px] text-[var(--text-secondary)] select-none">
                       Please address this follow-up detail in your response below before moving forward.
                     </p>
                   </div>

@@ -143,7 +143,28 @@ export function ProctoringGuard({ interviewId, onSecurityWarning, policy }: Proc
     };
 
     const handleCopy = (e: ClipboardEvent) => {
+      // Check if user is inside an editable input or textarea (e.g. editing their own code/answer)
+      const activeEl = document.activeElement;
+      const isInput =
+        activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement;
+
       const selected = window.getSelection()?.toString() || "";
+      if (!isInput && selected.length > 0) {
+        // Intercept and block copying of question prompts, instructions, or exam material
+        e.preventDefault();
+        if (e.clipboardData) {
+          e.clipboardData.setData("text/plain", "");
+        }
+        throttledLog(
+          "COPY",
+          `Candidate attempt to copy interview question text (${selected.length} characters) was BLOCKED.`
+        );
+        triggerWarning(
+          "Copying interview questions and exam prompts is prohibited by proctoring security."
+        );
+        return;
+      }
+
       if (selected.length > 20) {
         throttledLog("COPY", `Candidate copied ${selected.length} characters from interview.`);
       }
