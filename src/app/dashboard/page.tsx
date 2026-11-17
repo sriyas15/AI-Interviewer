@@ -192,10 +192,12 @@ export default async function DashboardPage(props: DashboardPageProps) {
                 : "Track your practice sessions and keep improving your interview skills."}
             </p>
           </div>
-          <Link href="/interview/new" className="btn btn-primary">
-            <Plus size={18} />
-            <span>New Interview</span>
-          </Link>
+          {isAdmin && (
+            <Link href="/interview/new" className="btn btn-primary">
+              <Plus size={18} />
+              <span>New Interview</span>
+            </Link>
+          )}
         </div>
 
         {/* ─── Stats Grid ─── */}
@@ -351,7 +353,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </div>
 
           {totalInterviews === 0 ? (
-            <EmptyState />
+            <EmptyState isAdmin={isAdmin} />
           ) : (
             <InterviewList interviews={interviews} />
           )}
