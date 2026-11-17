@@ -28,6 +28,8 @@ export default async function InterviewRoomPage({ params }: PageProps) {
       topics: true,
       status: true,
       userId: true,
+      durationMinutes: true,
+      startedAt: true,
     },
   });
 
