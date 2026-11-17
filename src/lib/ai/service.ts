@@ -464,7 +464,6 @@ Return a JSON object matching this schema:
       "In coding questions, articulate time/space complexity before writing implementation details.",
     ],
   };
-  };
 }
 
 // ─────────────────────────────────────────────────────────────
