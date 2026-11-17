@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { BrainCircuit, Plus } from "lucide-react";
 
-export function EmptyState() {
+interface EmptyStateProps {
+  isAdmin?: boolean;
+}
+
+export function EmptyState({ isAdmin = false }: EmptyStateProps) {
   return (
     <div className="empty-state">
       <div className="empty-state-icon">
@@ -11,13 +15,20 @@ export function EmptyState() {
       </div>
       <h3 className="empty-state-title">No Interview Sessions Yet</h3>
       <p className="empty-state-desc">
-        Start your first AI-powered mock interview to practice technical
-        concepts, coding problems, and behavioral questions.
+        {isAdmin
+          ? "Configure a new interview to simulate questions and test the candidate assessment environment."
+          : "You haven't completed any assessment sessions yet. Check the Assessment Invitations section above to begin your invited interviews."}
       </p>
-      <Link href="/interview/new" className="btn btn-primary">
-        <Plus size={18} />
-        <span>Start Your First Interview</span>
-      </Link>
+      {isAdmin ? (
+        <Link href="/interview/new" className="btn btn-primary">
+          <Plus size={18} />
+          <span>Start Your First Interview</span>
+        </Link>
+      ) : (
+        <div className="text-xs text-[var(--text-tertiary)] mt-2">
+          Assessment sessions will automatically appear here once started.
+        </div>
+      )}
     </div>
   );
 }
