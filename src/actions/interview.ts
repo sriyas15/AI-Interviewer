@@ -132,6 +132,27 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       };
     }
 
+    // Check if total assessment duration has expired
+    const durationMinutes = interview.durationMinutes || 30;
+    if (interview.startedAt) {
+      const elapsedMs = Date.now() - new Date(interview.startedAt).getTime();
+      const maxMs = durationMinutes * 60 * 1000;
+      if (elapsedMs > maxMs) {
+        await db.interview.update({
+          where: { id: interview.id },
+          data: {
+            status: "COMPLETED",
+            completedAt: new Date(),
+          },
+        });
+        return {
+          success: true,
+          isCompleted: true,
+          error: "Assessment time has expired.",
+        };
+      }
+    }
+
     const existingQuestions = interview.questions;
 
     // Check if there is an existing unanswered question
@@ -142,6 +163,8 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
         question: unansweredQuestion,
         totalQuestions: Math.max(5, existingQuestions.length),
         isCompleted: false,
+        durationMinutes,
+        startedAt: interview.startedAt,
       };
     }
 
@@ -168,6 +191,12 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       })),
     });
 
+    const tailoredHints = [
+      `Review key ${interview.jobRole} constraints and edge conditions.`,
+      `Consider time/space complexity optimization opportunities.`,
+      `Provide concrete architectural or practical implementation details.`
+    ];
+
     // Save question in database
     const newQuestion = await db.question.create({
       data: {
@@ -177,6 +206,7 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
         content: generated.content,
         context: generated.context || null,
         expectedTopics: generated.expectedTopics,
+        hints: tailoredHints,
       },
       include: {
         response: true,
@@ -188,6 +218,8 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       question: newQuestion,
       totalQuestions: MAX_QUESTIONS,
       isCompleted: false,
+      durationMinutes,
+      startedAt: interview.startedAt,
     };
   } catch (error) {
     console.error("Error in getOrGenerateNextQuestion:", error);
@@ -206,6 +238,7 @@ interface SubmitAnswerInput {
   code?: string | null;
   language?: string | null;
   durationMs?: number | null;
+  hintsUsed?: number;
 }
 
 export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
@@ -215,7 +248,7 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       return { success: false, error: "Unauthorized" };
     }
 
-    const { interviewId, questionId, content, code, language, durationMs } = input;
+    const { interviewId, questionId, content, code, language, durationMs, hintsUsed = 0 } = input;
 
     // Security check: verify ownership
     const interview = await db.interview.findUnique({
@@ -274,7 +307,14 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       difficulty: interview.difficulty,
     });
 
-    // 2. Persist Response and Evaluation
+    // 1b. Apply hint penalty: 1 hint = -5%, 2 hints = -10%, 3 hints = -15%
+    const numHints = Math.max(0, Math.min(3, hintsUsed));
+    const penaltyFraction = numHints === 1 ? 0.05 : numHints === 2 ? 0.10 : numHints >= 3 ? 0.15 : 0;
+    const rawScore = evaluationResult.score;
+    const penaltyAmount = Number((rawScore * penaltyFraction).toFixed(2));
+    const finalScore = Math.max(0, Number((rawScore - penaltyAmount).toFixed(1)));
+
+    // 2. Persist Response and Evaluation with explicit hint penalty
     const savedResponse = await db.response.create({
       data: {
         questionId: targetQuestion.id,
@@ -282,10 +322,14 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
         code: code || null,
         language: language || null,
         durationMs: durationMs || null,
+        hintsUsed: numHints,
+        penaltyScore: penaltyAmount,
         evaluation: {
           create: {
-            score: evaluationResult.score,
-            feedback: evaluationResult.feedback,
+            score: finalScore,
+            feedback: numHints > 0
+              ? `${evaluationResult.feedback} [Note: A ${Math.round(penaltyFraction * 100)}% hint penalty was applied to this question score (-${penaltyAmount.toFixed(1)} pts).]`
+              : evaluationResult.feedback,
             strengths: evaluationResult.strengths,
             weaknesses: evaluationResult.weaknesses,
             followUpAsked: evaluationResult.shouldFollowUp,
@@ -296,6 +340,25 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
         evaluation: true,
       },
     });
+
+    // Track hints on interview session
+    if (numHints > 0) {
+      await db.interview.update({
+        where: { id: interviewId },
+        data: {
+          hintsUsed: { increment: numHints },
+        },
+      });
+
+      await db.activityEvent.create({
+        data: {
+          interviewId,
+          type: "HINT_REQUESTED",
+          description: `Candidate used ${numHints} hint(s) on Question #${targetQuestion.orderIndex} (-${Math.round(penaltyFraction * 100)}% scoring penalty applied).`,
+          metadata: { hintsUsed: numHints, penaltyScore: penaltyAmount, questionId: targetQuestion.id },
+        },
+      });
+    }
 
     // 3. Check if all questions are now answered
     const MAX_QUESTIONS = 5;
@@ -394,7 +457,7 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
 
 interface LogActivityInput {
   interviewId: string;
-  type: "TAB_SWITCH" | "COPY" | "PASTE" | "FULLSCREEN_EXIT" | "WINDOW_BLUR" | "SUSPICIOUS_TYPING";
+  type: "TAB_SWITCH" | "COPY" | "PASTE" | "FULLSCREEN_EXIT" | "WINDOW_BLUR" | "SUSPICIOUS_TYPING" | "HINT_REQUESTED";
   description?: string;
   metadata?: Record<string, unknown>;
 }
@@ -413,6 +476,7 @@ export async function logActivityEvent(input: LogActivityInput) {
       "FULLSCREEN_EXIT",
       "WINDOW_BLUR",
       "SUSPICIOUS_TYPING",
+      "HINT_REQUESTED",
     ] as const;
 
     if (!ALLOWED_TYPES.includes(type)) {
@@ -444,6 +508,43 @@ export async function logActivityEvent(input: LogActivityInput) {
   } catch (e) {
     console.warn("Failed to log activity event:", e);
     return { success: false };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Recruiter Feedback Release Control
+// ─────────────────────────────────────────────────────────────
+
+export async function toggleReleaseFeedbackAction(interviewId: string) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id || session.user.role !== "ADMIN") {
+      return { success: false, error: "Unauthorized. Admin role required to release feedback." };
+    }
+
+    const interview = await db.interview.findUnique({
+      where: { id: interviewId },
+      select: { id: true, feedbackReleased: true },
+    });
+
+    if (!interview) {
+      return { success: false, error: "Interview session not found." };
+    }
+
+    const updated = await db.interview.update({
+      where: { id: interviewId },
+      data: {
+        feedbackReleased: !interview.feedbackReleased,
+      },
+    });
+
+    return {
+      success: true,
+      feedbackReleased: updated.feedbackReleased,
+    };
+  } catch (err) {
+    console.error("toggleReleaseFeedbackAction error:", err);
+    return { success: false, error: "Failed to update feedback release setting." };
   }
 }
 
