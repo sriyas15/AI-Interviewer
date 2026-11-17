@@ -36,6 +36,8 @@ interface QuestionData {
   context: string | null;
   expectedTopics: string[];
   hints?: string[];
+  testCases?: any;
+  starterCode?: any;
 }
 
 interface InterviewRoomProps {
@@ -69,6 +71,12 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   // State Machine: Follow-up tracking (C2)
   const [followUpCount, setFollowUpCount] = useState<number>(0);
   const [activeFollowUpPrompt, setActiveFollowUpPrompt] = useState<string | null>(null);
+
+  // Real Test Case summary from CodeEditor (Item 1)
+  const [testCaseSummary, setTestCaseSummary] = useState<{ passed: number; total: number } | null>(null);
+
+  // Runtime Proctoring Policy (Item 7)
+  const [proctoringPolicy, setProctoringPolicy] = useState<any>(null);
 
   // Capped Hints State with Per-Question Hints & Scoring Penalty
   const [hintsUsed, setHintsUsed] = useState<number>(0);
@@ -118,6 +126,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     setSecondsElapsed(0);
     setFollowUpCount(0);
     setActiveFollowUpPrompt(null);
+    setTestCaseSummary(null);
     setHintsUsed(0);
     setRevealedHints([]);
 
@@ -133,6 +142,10 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
       if (res.isCompleted) {
         router.push(`/interview/${interview.id}/report`);
         return;
+      }
+
+      if (res.proctoringPolicy) {
+        setProctoringPolicy(res.proctoringPolicy);
       }
 
       if (res.question) {
@@ -254,6 +267,10 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         language: currentQuestion.type === "CODING" ? codeLanguage : null,
         durationMs: secondsElapsed * 1000,
         hintsUsed,
+        isFollowUp: !!activeFollowUpPrompt,
+        followUpPrompt: activeFollowUpPrompt,
+        testCasesPassed: currentQuestion.type === "CODING" ? testCaseSummary?.passed : undefined,
+        testCasesTotal: currentQuestion.type === "CODING" ? testCaseSummary?.total : undefined,
       });
 
       if (!result.success) {
@@ -284,7 +301,11 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         return;
       }
 
-      // Otherwise, candidate completed this question.
+      // Candidate completed this question - clear follow-up state
+      setActiveFollowUpPrompt(null);
+      setFollowUpCount(0);
+      setTestCaseSummary(null);
+
       // The room doesn't render per-question scores or feedback to avoid biasing the candidate or leaking rubrics.
       setIsTransitioning(true);
 
@@ -398,8 +419,8 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
             <span>Q: {formatTimer(secondsElapsed)}</span>
           </div>
 
-          {/* Anti-cheat proctoring guard with fullscreen & throttling (C6) */}
-          <ProctoringGuard interviewId={interview.id} />
+          {/* Anti-cheat proctoring guard with fullscreen & throttling (C6 / Policy) */}
+          <ProctoringGuard interviewId={interview.id} policy={proctoringPolicy} />
         </div>
       </header>
 
@@ -549,6 +570,8 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
                       onChange={setCodeText}
                       language={codeLanguage}
                       onLanguageChange={setCodeLanguage}
+                      sampleTestCases={currentQuestion.testCases || undefined}
+                      onTestResultsChange={(s) => setTestCaseSummary({ passed: s.passed, total: s.total })}
                     />
                   </div>
                 )}
