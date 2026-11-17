@@ -8,6 +8,9 @@ import {
   LayoutDashboard,
   Shield,
   ArrowRight,
+  Mail,
+  Clock,
+  CheckCircle2,
 } from "lucide-react";
 import { InterviewList } from "@/components/dashboard/interview-list";
 import { StatsGrid } from "@/components/dashboard/stats-grid";
@@ -36,8 +39,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
     redirect("/admin");
   }
 
-  // Candidate-safe query: no scores, evaluations, or reports
-  const [interviews, user] = await Promise.all([
+  const candidateEmail = (session.user.email || "").toLowerCase().trim();
+
+  // Candidate-safe query: sessions, user profile, and candidate invitations
+  const [interviews, user, invitations] = await Promise.all([
     db.interview.findMany({
       where: { userId: session.user.id },
       select: {
@@ -58,6 +63,25 @@ export default async function DashboardPage(props: DashboardPageProps) {
       where: { id: session.user.id },
       select: { name: true, email: true, image: true },
     }),
+    candidateEmail
+      ? db.interviewInvitation.findMany({
+          where: {
+            candidateEmail: {
+              equals: candidateEmail,
+              mode: "insensitive",
+            },
+          },
+          include: {
+            template: {
+              select: { title: true, duration: true, questionCount: true },
+            },
+            interview: {
+              select: { id: true, status: true },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        })
+      : Promise.resolve([]),
   ]);
 
   const totalInterviews = interviews.length;
@@ -203,6 +227,119 @@ export default async function DashboardPage(props: DashboardPageProps) {
             },
           ]}
         />
+
+        {/* ─── Candidate Assessment Invitations List ─── */}
+        <div className="dashboard-section">
+          <div className="section-header">
+            <div className="flex items-center gap-2">
+              <Mail size={18} className="text-[var(--color-primary)]" />
+              <h2 className="section-title-sm">Assessment Invitations</h2>
+            </div>
+            {invitations.length > 0 && (
+              <span className="badge badge-primary">{invitations.length} invite(s)</span>
+            )}
+          </div>
+
+          {invitations.length === 0 ? (
+            <div className="card p-5 border border-[var(--surface-border)] rounded-xl text-center text-xs text-[var(--text-secondary)]">
+              No pending assessment invitations found for your verified email ({candidateEmail || "your account"}).
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {invitations.map((inv) => {
+                const isExpired =
+                  inv.status === "EXPIRED" ||
+                  (inv.status === "INVITED" && new Date() > new Date(inv.expiresAt));
+                const isStarted = inv.status === "STARTED";
+                const isCompleted = inv.status === "COMPLETED";
+
+                return (
+                  <div
+                    key={inv.id}
+                    className="card p-5 border border-[var(--surface-border)] rounded-xl flex flex-col justify-between gap-4"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="font-bold text-sm text-[var(--text-primary)]">
+                          {inv.template?.title || `${inv.jobRole} Assessment`}
+                        </span>
+                        <span
+                          className={`badge text-[10px] ${
+                            isCompleted
+                              ? "badge-success"
+                              : isStarted
+                              ? "badge-warning"
+                              : isExpired
+                              ? "badge-error"
+                              : "badge-primary"
+                          }`}
+                        >
+                          {isCompleted
+                            ? "Completed"
+                            : isStarted
+                            ? "In Progress"
+                            : isExpired
+                            ? "Expired"
+                            : "Invited"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
+                        <span className="flex items-center gap-1">
+                          <Clock size={12} />
+                          {inv.template?.duration || 30} mins
+                        </span>
+                        <span>•</span>
+                        <span className="capitalize">{inv.difficulty.toLowerCase()} Level</span>
+                      </div>
+
+                      <div className="text-[11px] text-[var(--text-tertiary)] mt-2">
+                        {isExpired
+                          ? `Expired on ${new Date(inv.expiresAt).toLocaleDateString()}`
+                          : `Expires on ${new Date(inv.expiresAt).toLocaleDateString()} at ${new Date(inv.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-[var(--surface-border)] flex items-center justify-end">
+                      {isCompleted && inv.interviewId ? (
+                        <Link
+                          href={`/interview/${inv.interviewId}/report`}
+                          className="btn btn-secondary btn-sm text-xs py-1.5 px-3 flex items-center gap-1.5"
+                        >
+                          <span>View Submission</span>
+                          <ArrowRight size={13} />
+                        </Link>
+                      ) : isStarted && inv.interviewId ? (
+                        <Link
+                          href={`/interview/${inv.interviewId}`}
+                          className="btn btn-primary btn-sm text-xs py-1.5 px-3 flex items-center gap-1.5"
+                        >
+                          <span>Resume Interview</span>
+                          <ArrowRight size={13} />
+                        </Link>
+                      ) : !isExpired ? (
+                        <Link
+                          href={`/invite/${inv.token}`}
+                          className="btn btn-primary btn-sm text-xs py-1.5 px-3 flex items-center gap-1.5"
+                        >
+                          <span>Start Assessment</span>
+                          <ArrowRight size={13} />
+                        </Link>
+                      ) : (
+                        <button
+                          disabled
+                          className="btn btn-secondary btn-sm text-xs py-1.5 px-3 opacity-50 cursor-not-allowed"
+                        >
+                          Link Expired
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         {/* ─── Interview History ─── */}
         <div className="dashboard-section">
