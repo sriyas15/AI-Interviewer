@@ -105,6 +105,13 @@ export const evaluationSchema = z.object({
     .string()
     .optional()
     .describe("Follow-up question if needed"),
+  modelName: z.string().optional(),
+  promptVersion: z.string().optional(),
+  tokenCount: z.number().optional(),
+  estimatedCost: z.number().optional(),
+  codeCorrectness: z.number().optional(),
+  codeEfficiency: z.number().optional(),
+  codeReadability: z.number().optional(),
 });
 
 export const reportSchema = z.object({
@@ -119,6 +126,10 @@ export const reportSchema = z.object({
   recommendations: z
     .array(z.string())
     .describe("Actionable suggestions for improvement"),
+  modelName: z.string().optional(),
+  promptVersion: z.string().optional(),
+  tokenCount: z.number().optional(),
+  estimatedCost: z.number().optional(),
 });
 
 export const loginSchema = z.object({

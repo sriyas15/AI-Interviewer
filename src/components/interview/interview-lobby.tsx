@@ -452,7 +452,7 @@ export function InterviewLobby({ interview }: InterviewLobbyProps) {
           <div className="card p-6 border border-[var(--surface-border)] rounded-2xl flex flex-col gap-5">
             <h2 className="text-lg font-bold text-[var(--text-primary)] flex items-center gap-2">
               <ShieldAlert size={18} className="text-[var(--color-warning)]" />
-              Interview Guidelines
+              Interview Guidelines &amp; Consent Step
             </h2>
 
             <div className="space-y-3.5 text-xs text-[var(--text-secondary)]">

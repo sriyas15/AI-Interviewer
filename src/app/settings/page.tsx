@@ -12,8 +12,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   Calendar,
+  Trash2,
+  Clock,
 } from "lucide-react";
 import { ProfileDropdown } from "@/components/auth/profile-dropdown";
+import { requestDataDeletionAction } from "@/actions/settings";
 
 export const instant = false;
 
@@ -24,22 +27,28 @@ export default async function SettingsPage() {
     redirect("/login");
   }
 
-  const user = await db.user.findUnique({
-    where: { id: session.user.id },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      image: true,
-      role: true,
-      emailVerified: true,
-      passwordHash: true,
-      createdAt: true,
-      _count: {
-        select: { interviews: true },
+  const [user, pendingDeletion] = await Promise.all([
+    db.user.findUnique({
+      where: { id: session.user.id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        role: true,
+        emailVerified: true,
+        passwordHash: true,
+        createdAt: true,
+        _count: {
+          select: { interviews: true },
+        },
       },
-    },
-  });
+    }),
+    db.dataDeletionRequest.findFirst({
+      where: { userId: session.user.id },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
 
   if (!user) {
     redirect("/login");
@@ -201,6 +210,77 @@ export default async function SettingsPage() {
                 </Link>
               )}
             </div>
+          </div>
+
+          {/* ─── Data Privacy & Deletion Request (GDPR / CCPA) ─── */}
+          <div className="card p-6 border border-[var(--surface-border)] flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-[var(--color-error)] flex items-center gap-2">
+                  <Trash2 size={16} />
+                  <span>Privacy &amp; Data Deletion Request</span>
+                </h2>
+                <p className="text-xs text-[var(--text-secondary)] mt-1">
+                  Exercise your right to erasure (GDPR Article 17 / CCPA). You can request permanent deletion of all your interview recordings, AI evaluations, code submissions, and activity logs.
+                </p>
+              </div>
+            </div>
+
+            {pendingDeletion && pendingDeletion.status === "PENDING" ? (
+              <div className="p-4 bg-[var(--color-warning-subtle)] border border-[rgba(255,170,0,0.3)] rounded-lg text-xs text-[var(--color-warning)] space-y-1">
+                <div className="font-semibold flex items-center gap-1.5">
+                  <Clock size={14} />
+                  <span>Data Deletion Request Pending</span>
+                </div>
+                <p className="text-[11px] text-[var(--text-secondary)]">
+                  Submitted on {new Date(pendingDeletion.createdAt).toLocaleDateString()}. Our privacy compliance system processes pending deletion requests within 30 days.
+                </p>
+              </div>
+            ) : pendingDeletion && pendingDeletion.status === "COMPLETED" ? (
+              <div className="p-4 bg-[var(--color-success-subtle)] border border-[rgba(0,214,143,0.3)] rounded-lg text-xs text-[var(--color-success)] space-y-1">
+                <div className="font-semibold flex items-center gap-1.5">
+                  <CheckCircle2 size={14} />
+                  <span>Data Deletion Completed</span>
+                </div>
+                <p className="text-[11px] text-[var(--text-secondary)]">
+                  Your historical assessment data was purged on {new Date(pendingDeletion.createdAt).toLocaleDateString()}.
+                </p>
+              </div>
+            ) : (
+              <form
+                action={async (formData: FormData) => {
+                  "use server";
+                  const reason = formData.get("reason") as string;
+                  await requestDataDeletionAction(reason);
+                }}
+                className="space-y-3 pt-2"
+              >
+                <div className="space-y-1">
+                  <label htmlFor="reason" className="text-xs text-[var(--text-secondary)]">
+                    Optional reason for deletion:
+                  </label>
+                  <input
+                    id="reason"
+                    name="reason"
+                    type="text"
+                    placeholder="e.g. Completed job search, privacy preferences..."
+                    className="input text-xs w-full py-2 px-3"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-[var(--text-tertiary)]">
+                    This action requests irreversible erasure of your assessment history.
+                  </span>
+                  <button
+                    type="submit"
+                    className="btn btn-sm text-xs py-1.5 px-3 bg-[rgba(255,71,87,0.15)] text-[var(--color-error)] border border-[rgba(255,71,87,0.3)] hover:bg-[rgba(255,71,87,0.25)]"
+                  >
+                    Request Data Deletion
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       </div>

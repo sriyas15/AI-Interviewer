@@ -15,9 +15,19 @@ import {
   Layers,
 } from "lucide-react";
 
-interface TestCase {
+export interface TestCase {
   input: string;
   expectedOutput: string;
+  isHidden?: boolean;
+  explanation?: string;
+}
+
+export interface TestResult {
+  input: string;
+  expected: string;
+  actual: string;
+  passed: boolean;
+  isHidden?: boolean;
 }
 
 interface RunHistoryEntry {
@@ -34,6 +44,7 @@ interface CodeEditorProps {
   language?: string;
   onLanguageChange?: (lang: string) => void;
   sampleTestCases?: TestCase[];
+  onTestResultsChange?: (summary: { passed: number; total: number; results: TestResult[] }) => void;
 }
 
 export function CodeEditor({
@@ -45,6 +56,7 @@ export function CodeEditor({
     { input: "[2, 7, 11, 15], 9", expectedOutput: "[0, 1]" },
     { input: "[3, 2, 4], 6", expectedOutput: "[1, 2]" },
   ],
+  onTestResultsChange,
 }: CodeEditorProps) {
   const [output, setOutput] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -100,6 +112,7 @@ export function CodeEditor({
       const workerCode = `
         self.onmessage = function(e) {
           var code = e.data.code;
+          var testCases = e.data.testCases || [];
           var logs = [];
           var customConsole = {
             log: function() {
@@ -117,6 +130,7 @@ export function CodeEditor({
           };
 
           try {
+            // 1. Initial code execution to detect syntax errors and capture top-level console output
             var runner = new Function(
               'console', 'window', 'document', 'localStorage', 'sessionStorage', 'fetch', 'XMLHttpRequest', 'WebSocket', 'importScripts',
               '"use strict"; ' + code
@@ -125,7 +139,65 @@ export function CodeEditor({
             if (result !== undefined) {
               logs.push('=> Returned: ' + (typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)));
             }
-            self.postMessage({ success: true, logs: logs, result: result });
+
+            // 2. Real test case evaluation against candidate's functions
+            var testResults = [];
+            if (testCases && testCases.length > 0) {
+              for (var i = 0; i < testCases.length; i++) {
+                var tc = testCases[i];
+                try {
+                  var testRunner = new Function(
+                    'console', 'tcInput',
+                    '"use strict"; ' +
+                    code + '\\n' +
+                    'var entryFn = null;\\n' +
+                    'var knownNames = ["twoSum", "debounce", "solution", "solve", "mergeIntervals", "findMedianSortedArrays", "isValid"];\\n' +
+                    'for (var k = 0; k < knownNames.length; k++) {\\n' +
+                    '  try { if (eval("typeof " + knownNames[k]) === "function") { entryFn = eval(knownNames[k]); break; } } catch(ignore) {}\\n' +
+                    '}\\n' +
+                    'if (!entryFn) {\\n' +
+                    '  try {\\n' +
+                    '    var names = Object.getOwnPropertyNames(this);\\n' +
+                    '    for (var n = 0; n < names.length; n++) {\\n' +
+                    '      if (typeof this[names[n]] === "function" && names[n] !== "eval") { entryFn = this[names[n]]; break; }\\n' +
+                    '    }\\n' +
+                    '  } catch(e) {}\\n' +
+                    '}\\n' +
+                    'if (entryFn) {\\n' +
+                    '  var args;\\n' +
+                    '  try { args = eval("[" + tcInput + "]"); } catch(e) { args = [tcInput]; }\\n' +
+                    '  return entryFn.apply(null, args);\\n' +
+                    '} else {\\n' +
+                    '  return eval(tcInput);\\n' +
+                    '}\\n'
+                  );
+
+                  var actual = testRunner(customConsole, tc.input);
+                  var actualStr = actual === undefined ? "undefined" : (typeof actual === "object" ? JSON.stringify(actual) : String(actual));
+                  var expectedNorm = String(tc.expectedOutput).trim().replace(/\\s+/g, "");
+                  var actualNorm = actualStr.trim().replace(/\\s+/g, "");
+                  var passed = (actualNorm === expectedNorm);
+
+                  testResults.push({
+                    input: tc.input,
+                    expected: tc.expectedOutput,
+                    actual: actualStr,
+                    passed: passed,
+                    isHidden: !!tc.isHidden,
+                  });
+                } catch (tcErr) {
+                  testResults.push({
+                    input: tc.input,
+                    expected: tc.expectedOutput,
+                    actual: "Error: " + tcErr.message,
+                    passed: false,
+                    isHidden: !!tc.isHidden,
+                  });
+                }
+              }
+            }
+
+            self.postMessage({ success: true, logs: logs, result: result, testResults: testResults });
           } catch (err) {
             self.postMessage({ success: false, error: err.message, logs: logs });
           }
@@ -166,26 +238,22 @@ export function CodeEditor({
         const elapsed = Math.round(performance.now() - startTime);
         setExecutionTime(elapsed);
 
-        const { success, logs, error, result } = e.data;
+        const { success, logs, error, testResults: evaluatedTests } = e.data;
         let out = "";
         if (success) {
-          out = logs && logs.length > 0 ? logs.join("\n") : "Code executed successfully with no output.";
+          out = logs && logs.length > 0 ? logs.join("\n") : "Code executed successfully with no console output.";
           setOutput(out);
           setHasError(false);
 
-          // Test evaluation against sample test cases
-          if (sampleTestCases && sampleTestCases.length > 0) {
-            const evaluated = sampleTestCases.map((tc, idx) => {
-              // Simulated test evaluation based on returned output or string matching
-              const passed = idx === 0 ? true : Math.random() > 0.3;
-              return {
-                input: tc.input,
-                expected: tc.expectedOutput,
-                actual: tc.expectedOutput,
-                passed,
-              };
+          // Real test evaluation against provided bank test cases
+          if (evaluatedTests && evaluatedTests.length > 0) {
+            setTestResults(evaluatedTests);
+            const passedCount = evaluatedTests.filter((r: any) => r.passed).length;
+            onTestResultsChange?.({
+              passed: passedCount,
+              total: evaluatedTests.length,
+              results: evaluatedTests,
             });
-            setTestResults(evaluated);
           }
 
           // Record run history (C4)
@@ -231,7 +299,7 @@ export function CodeEditor({
         setIsRunning(false);
       };
 
-      worker.postMessage({ code: value });
+      worker.postMessage({ code: value, testCases: sampleTestCases });
     } catch (err: any) {
       const elapsed = Math.round(performance.now() - startTime);
       setExecutionTime(elapsed);
@@ -428,13 +496,20 @@ export function CodeEditor({
                   </div>
 
                   {res && (
-                    <span
-                      className={`badge text-[10px] ${
-                        res.passed ? "badge-success" : "badge-error"
-                      }`}
-                    >
-                      {res.passed ? "Passed" : "Failed"}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {!res.passed && (
+                        <span className="text-[10px] text-[var(--color-error)]">
+                          got: <code>{res.actual}</code>
+                        </span>
+                      )}
+                      <span
+                        className={`badge text-[10px] ${
+                          res.passed ? "badge-success" : "badge-error"
+                        }`}
+                      >
+                        {res.passed ? "Passed" : "Failed"}
+                      </span>
+                    </div>
                   )}
                 </div>
               );

@@ -3,9 +3,19 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { registerSchema } from "@/lib/validations";
 import { Role } from "@prisma/client";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
   try {
+    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+    const limiter = rateLimit(`register:${ip}`, { limit: 10, windowMs: 60000 });
+    if (!limiter.success) {
+      return NextResponse.json(
+        { success: false, error: "Too many registration attempts. Please wait a minute and try again." },
+        { status: 429 }
+      );
+    }
+
     const body = await req.json();
 
     // 1. Validate request body against schema

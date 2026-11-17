@@ -18,6 +18,9 @@ export const authConfig: NextAuthConfig = {
         if (user.role) {
           token.role = user.role;
         }
+        if (user.isActive !== undefined) {
+          token.isActive = user.isActive;
+        }
       }
       return token;
     },
@@ -25,6 +28,7 @@ export const authConfig: NextAuthConfig = {
       if (token && session.user) {
         session.user.id = (token.id as string) || (token.sub as string) || "";
         session.user.role = (token.role as any) || "CANDIDATE";
+        session.user.isActive = token.isActive !== false;
       }
       return session;
     },

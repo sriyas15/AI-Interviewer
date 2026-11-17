@@ -14,8 +14,7 @@ export default async function NewInterviewPage() {
     redirect("/login");
   }
 
-  // Role Gate: Candidates cannot self-configure interviews.
-  // Assessment sessions must be initiated via recruiter invitation links.
+  // Candidate role gate: Only ADMIN can configure standalone interviews directly (Item 9 Option A)
   if (session.user.role !== "ADMIN") {
     redirect("/dashboard");
   }

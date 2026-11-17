@@ -4,17 +4,41 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { ShieldCheck, ShieldAlert, AlertTriangle, Maximize, Minimize } from "lucide-react";
 import { logActivityEvent } from "@/actions/interview";
 
+interface ProctoringPolicy {
+  tabSwitchLimit?: number;
+  blockPaste?: boolean;
+  fullscreenRequired?: boolean;
+}
+
 interface ProctoringGuardProps {
   interviewId: string;
   onSecurityWarning?: (warning: string) => void;
+  policy?: ProctoringPolicy | null;
 }
 
-export function ProctoringGuard({ interviewId, onSecurityWarning }: ProctoringGuardProps) {
+export function ProctoringGuard({ interviewId, onSecurityWarning, policy }: ProctoringGuardProps) {
   const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [incidentCount, setIncidentCount] = useState<number>(0);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastEventTimeRef = useRef<Record<string, number>>({});
+
+  // Auto-request fullscreen if policy requires it (Item 7)
+  useEffect(() => {
+    if (policy?.fullscreenRequired && !document.fullscreenElement) {
+      const enterFs = async () => {
+        try {
+          if (document.documentElement.requestFullscreen) {
+            await document.documentElement.requestFullscreen();
+            setIsFullscreen(true);
+          }
+        } catch {
+          // User interaction required on some browsers
+        }
+      };
+      enterFs();
+    }
+  }, [policy?.fullscreenRequired]);
 
   // Throttled logging helper: prevents event spamming (C6)
   const throttledLog = useCallback(
@@ -67,8 +91,14 @@ export function ProctoringGuard({ interviewId, onSecurityWarning }: ProctoringGu
     // 1. Tab Switch / Visibility Change
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
-        if (throttledLog("TAB_SWITCH", "Candidate switched away from interview browser tab.")) {
-          triggerWarning("Tab switch detected. Your activity is logged for recruiter audit.");
+        const nextCount = incidentCount + 1;
+        const limit = policy?.tabSwitchLimit;
+        if (throttledLog("TAB_SWITCH", `Candidate switched away from interview browser tab (incident #${nextCount}).`)) {
+          if (limit && nextCount >= limit) {
+            triggerWarning(`Security alert: Tab switch limit (${limit}) exceeded. Activity flagged for recruiter.`);
+          } else {
+            triggerWarning(`Tab switch detected (${nextCount}${limit ? `/${limit}` : ""}). Your activity is logged for recruiter audit.`);
+          }
         }
       }
     };
@@ -89,9 +119,15 @@ export function ProctoringGuard({ interviewId, onSecurityWarning }: ProctoringGu
       }
     };
 
-    // 4. Catch Paste and Copy (C6)
+    // 4. Catch Paste and Copy (C6 / Policy Enforcement)
     const handlePaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData("text") || "";
+      if (policy?.blockPaste) {
+        e.preventDefault();
+        throttledLog("PASTE", `Candidate attempt to paste ${text.length} characters was BLOCKED by proctoring policy.`);
+        triggerWarning("Paste blocked: External clipboard pasting is prohibited by the recruiter's assessment policy.");
+        return;
+      }
       if (text.length > 25) {
         if (
           throttledLog(

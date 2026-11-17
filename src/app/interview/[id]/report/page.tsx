@@ -8,17 +8,21 @@ import {
   Shield,
   Layers,
   FileCheck,
+  Eye,
+  EyeOff,
+  Share2,
 } from "lucide-react";
 import { InterviewReportView } from "@/components/interview/interview-report-view";
-import { generateFinalInterviewReport } from "@/lib/ai/service";
+import { toggleReleaseFeedbackAction } from "@/actions/interview";
 
 export const instant = false;
 
 interface PageProps {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ preview?: string }>;
 }
 
-export default async function InterviewReportPage({ params }: PageProps) {
+export default async function InterviewReportPage({ params, searchParams }: PageProps) {
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -26,6 +30,8 @@ export default async function InterviewReportPage({ params }: PageProps) {
   }
 
   const { id } = await params;
+  const queryParams = searchParams ? await searchParams : {};
+  const isCandidatePreview = queryParams.preview === "candidate";
 
   const interview = await db.interview.findUnique({
     where: { id },
@@ -65,69 +71,15 @@ export default async function InterviewReportPage({ params }: PageProps) {
     redirect("/dashboard");
   }
 
-  let report = interview.report;
+  const report = interview.report;
+  const isFeedbackReleased = interview.feedbackReleased;
 
-  // If session has no report yet, compile it now
-  if (!report) {
-    const questionsWithResponses = interview.questions;
-    if (questionsWithResponses.length === 0) {
-      redirect(`/interview/${id}`);
-    }
+  // ─── CANDIDATE VIEW OR ADMIN PREVIEW MODE ───
+  // Candidate only sees "Submitted for Review" unless recruiter has released feedback (or in admin preview)
+  const shouldShowCandidateSubmittedView =
+    (isAdmin && isCandidatePreview) || (!isAdmin && !isFeedbackReleased);
 
-    const compiled = await generateFinalInterviewReport({
-      interview: {
-        jobRole: interview.jobRole,
-        difficulty: interview.difficulty,
-        topics: interview.topics,
-      },
-      questionsWithResponses: questionsWithResponses.map((q) => ({
-        content: q.content,
-        type: q.type,
-        response: q.response
-          ? {
-              content: q.response.content,
-              code: q.response.code,
-              evaluation: q.response.evaluation
-                ? {
-                    score: q.response.evaluation.score,
-                    feedback: q.response.evaluation.feedback,
-                    strengths: q.response.evaluation.strengths,
-                    weaknesses: q.response.evaluation.weaknesses,
-                  }
-                : null,
-            }
-          : null,
-      })),
-    });
-
-    report = await db.report.create({
-      data: {
-        interviewId: interview.id,
-        overallScore: compiled.overallScore,
-        summary: compiled.summary,
-        technicalScore: compiled.technicalScore,
-        communicationScore: compiled.communicationScore,
-        problemSolvingScore: compiled.problemSolvingScore,
-        codeQualityScore: compiled.codeQualityScore ?? null,
-        strengths: compiled.strengths,
-        weaknesses: compiled.weaknesses,
-        recommendations: compiled.recommendations,
-        detailedFeedback: compiled as unknown as object,
-      },
-    });
-
-    await db.interview.update({
-      where: { id: interview.id },
-      data: {
-        status: "COMPLETED",
-        completedAt: new Date(),
-        totalScore: compiled.overallScore,
-      },
-    });
-  }
-
-  // ─── CANDIDATE VIEW: Score-blind submission confirmation ───
-  if (!isAdmin) {
+  if (shouldShowCandidateSubmittedView) {
     return (
       <div className="setup-page">
         {/* Top Nav */}
@@ -137,12 +89,35 @@ export default async function InterviewReportPage({ params }: PageProps) {
               <BrainCircuit size={24} strokeWidth={1.5} />
               <span>AI Interviewer</span>
             </Link>
-            <Link href="/dashboard" className="btn btn-ghost btn-sm">
-              <ArrowLeft size={16} />
-              <span>Back to Dashboard</span>
-            </Link>
+
+            <div className="flex items-center gap-3">
+              {isAdmin && (
+                <Link
+                  href={`/interview/${id}/report`}
+                  className="btn btn-secondary btn-sm text-xs flex items-center gap-1.5"
+                >
+                  <EyeOff size={14} />
+                  <span>Exit Candidate Preview</span>
+                </Link>
+              )}
+              <Link href="/dashboard" className="btn btn-ghost btn-sm">
+                <ArrowLeft size={16} />
+                <span>Back to Dashboard</span>
+              </Link>
+            </div>
           </div>
         </nav>
+
+        {/* Admin Preview Mode Notice */}
+        {isAdmin && (
+          <div className="bg-amber-500/10 border-b border-amber-500/25 px-6 py-2.5 text-center text-xs text-amber-300 flex items-center justify-center gap-2">
+            <Eye size={14} />
+            <span>
+              <strong>Admin Preview Mode:</strong> You are viewing this page exactly as the candidate sees it. Candidate feedback is currently{" "}
+              <strong>{isFeedbackReleased ? "RELEASED" : "WITHHELD (Default)"}</strong>.
+            </span>
+          </div>
+        )}
 
         {/* Candidate Submission Confirmation Card */}
         <div className="setup-body" style={{ maxWidth: "680px", margin: "2rem auto" }}>
@@ -224,7 +199,7 @@ export default async function InterviewReportPage({ params }: PageProps) {
                 lineHeight: "1.5",
               }}
             >
-              Your responses, code submissions, and proctoring activity have been recorded and delivered to the recruitment administration team.
+              Your responses, code submissions, and proctoring activity have been recorded and delivered to the recruitment administration team. Detailed rubrics and scoring stay admin-only until released by your recruiter.
             </div>
 
             <Link href="/dashboard" className="btn btn-primary" style={{ width: "100%", padding: "0.75rem" }}>
@@ -236,35 +211,99 @@ export default async function InterviewReportPage({ params }: PageProps) {
     );
   }
 
-  // ─── ADMIN VIEW: Full AI Evaluation Report with Admin Controls ───
+  // If report hasn't finished compiling yet, display clean processing notice (does not trigger compile on GET)
+  if (!report) {
+    return (
+      <div className="setup-page">
+        <nav className="dashboard-nav">
+          <div className="dashboard-nav-inner">
+            <Link href="/" className="nav-brand">
+              <BrainCircuit size={24} strokeWidth={1.5} />
+              <span>AI Interviewer</span>
+            </Link>
+            <Link href="/dashboard" className="btn btn-ghost btn-sm">
+              Dashboard
+            </Link>
+          </div>
+        </nav>
+        <div className="setup-body text-center py-16">
+          <h2 className="text-xl font-bold">Report Synthesis In Progress</h2>
+          <p className="text-sm text-[var(--text-secondary)] mt-2">
+            The interview has completed and the report is being synthesized. Please check back shortly.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── ADMIN FULL REPORT VIEW (OR CANDIDATE WITH RELEASED FEEDBACK) ───
   return (
     <div className="setup-page">
       {/* Top Nav with Admin Bar */}
       <nav className="dashboard-nav no-print">
         <div className="dashboard-nav-inner max-w-7xl mx-auto">
           <div className="flex items-center gap-3">
-            <Link href="/admin" className="nav-brand">
+            <Link href={isAdmin ? "/admin" : "/dashboard"} className="nav-brand">
               <BrainCircuit size={24} strokeWidth={1.5} />
               <span>AI Interviewer</span>
             </Link>
             <div className="h-4 w-px bg-[var(--surface-border)]" />
             <Link
-              href={`/admin/interviews/${interview.id}`}
+              href={isAdmin ? "/admin" : "/dashboard"}
               className="btn btn-ghost btn-sm text-xs text-[var(--text-secondary)] flex items-center gap-1"
             >
               <ArrowLeft size={14} />
-              <span>Deep Dive Transcript</span>
+              <span>{isAdmin ? "Admin Portal" : "Dashboard"}</span>
             </Link>
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-[var(--color-warning-subtle)] border border-[rgba(255,170,0,0.3)] px-3 py-1 rounded-full text-xs text-[var(--color-warning)] font-medium">
-              <Shield size={14} />
-              <span>Admin Report View: {interview.user.name || interview.user.email}</span>
-            </div>
-            <Link href="/admin" className="btn btn-secondary btn-sm text-xs">
-              Admin Portal
-            </Link>
+            {isAdmin && (
+              <>
+                {/* Recruiter Release Feedback Action Button */}
+                <form
+                  action={async () => {
+                    "use server";
+                    await toggleReleaseFeedbackAction(interview.id);
+                  }}
+                >
+                  <button
+                    type="submit"
+                    className={`btn btn-sm text-xs flex items-center gap-1.5 ${
+                      isFeedbackReleased ? "btn-success" : "btn-secondary"
+                    }`}
+                    title={
+                      isFeedbackReleased
+                        ? "Feedback is visible to candidate. Click to withhold."
+                        : "Feedback is hidden from candidate. Click to release."
+                    }
+                  >
+                    <Share2 size={13} />
+                    <span>{isFeedbackReleased ? "Feedback Released" : "Release Feedback"}</span>
+                  </button>
+                </form>
+
+                {/* Preview as Candidate */}
+                <Link
+                  href={`/interview/${id}/report?preview=candidate`}
+                  className="btn btn-secondary btn-sm text-xs flex items-center gap-1.5"
+                >
+                  <Eye size={13} />
+                  <span>Preview as Candidate</span>
+                </Link>
+
+                <div className="flex items-center gap-2 bg-[var(--color-warning-subtle)] border border-[rgba(255,170,0,0.3)] px-3 py-1 rounded-full text-xs text-[var(--color-warning)] font-medium">
+                  <Shield size={14} />
+                  <span>Admin Mode</span>
+                </div>
+              </>
+            )}
+
+            {!isAdmin && isFeedbackReleased && (
+              <span className="badge badge-success text-xs">
+                Feedback Released by Recruiter
+              </span>
+            )}
           </div>
         </div>
       </nav>

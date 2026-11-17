@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai_interviewer_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ai_interviewer
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_interviewer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai_interviewer_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://postgres:password@postgres:5432/ai_interviewer"
+      AUTH_SECRET: "replace-with-long-random-secret-in-production-env"
+      NEXTAUTH_SECRET: "replace-with-long-random-secret-in-production-env"
+      AUTH_URL: "http://localhost:3000"
+      NEXTAUTH_URL: "http://localhost:3000"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      SMTP_HOST: "${SMTP_HOST:-smtp.gmail.com}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      SMTP_FROM: "${SMTP_FROM:-AI Interviewer <no-reply@ai-interviewer.com>}"
+
+volumes:
+  postgres_data:
+

@@ -295,6 +295,44 @@ export function AdminPortal({
       ) / 10
     : null;
 
+  // Role Performance Breakdown (Section B Analytics)
+  const roleScoreMap = new Map<string, { totalScore: number; count: number }>();
+  interviews.forEach((i) => {
+    if (typeof i.totalScore === "number") {
+      const prev = roleScoreMap.get(i.jobRole) || { totalScore: 0, count: 0 };
+      roleScoreMap.set(i.jobRole, { totalScore: prev.totalScore + i.totalScore, count: prev.count + 1 });
+    }
+  });
+  const roleAverages = Array.from(roleScoreMap.entries()).map(([role, data]) => ({
+    role,
+    count: data.count,
+    avgScore: Math.round((data.totalScore / data.count) * 10) / 10,
+  }));
+
+  // LLM Failure / Heuristic Fallback Rate (Section B Analytics)
+  const heuristicSessions = interviews.filter((i) => i.report?.modelName === "heuristic-fallback").length;
+  const llmFallbackRate = interviews.length
+    ? Math.round((heuristicSessions / interviews.length) * 100)
+    : 0;
+
+  // AI vs. Human Recruiter Agreement Analytics (Section B)
+  const reviewedWithScores = interviews.filter(
+    (i) => typeof i.totalScore === "number" && typeof i.humanScore === "number"
+  );
+  const avgScoreDelta = reviewedWithScores.length
+    ? Math.round(
+        (reviewedWithScores.reduce((acc, curr) => acc + Math.abs((curr.humanScore || 0) - (curr.totalScore || 0)), 0) /
+          reviewedWithScores.length) *
+          10
+      ) / 10
+    : null;
+  const agreedCount = reviewedWithScores.filter(
+    (i) => Math.abs((i.humanScore || 0) - (i.totalScore || 0)) <= 10
+  ).length;
+  const agreementRate = reviewedWithScores.length
+    ? Math.round((agreedCount / reviewedWithScores.length) * 100)
+    : null;
+
   // CSV Export Handler (A11)
   async function handleExportCsv() {
     const res = await exportCandidatePipelineCsvAction();
@@ -1700,6 +1738,150 @@ export function AdminPortal({
                 Avg Tokens / Session: <strong>{interviews.length ? Math.round(totalTokens / interviews.length).toLocaleString() : 0}</strong>
               </div>
             </div>
+
+            {/* Quality & Risk Telemetry */}
+            <div className="card card-glass" style={{ padding: "1.25rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                <AlertTriangle size={18} style={{ color: "var(--color-warning)" }} />
+                <h4 style={{ fontSize: "0.9rem", fontWeight: 600 }}>Quality &amp; Risk Telemetry</h4>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginTop: "0.5rem" }}>
+                <div style={{ padding: "0.75rem", backgroundColor: "var(--bg-secondary)", borderRadius: "var(--radius-md)" }}>
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Flagged Rate</span>
+                  <div style={{ fontSize: "1.35rem", fontWeight: 700, color: flaggedRate > 20 ? "var(--color-error)" : "var(--text-primary)" }}>
+                    {flaggedRate}%
+                  </div>
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)" }}>{flaggedSessions} flagged sessions</span>
+                </div>
+                <div style={{ padding: "0.75rem", backgroundColor: "var(--bg-secondary)", borderRadius: "var(--radius-md)" }}>
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)", textTransform: "uppercase" }}>LLM Fallback Rate</span>
+                  <div style={{ fontSize: "1.35rem", fontWeight: 700, color: llmFallbackRate > 0 ? "var(--color-warning)" : "var(--color-success)" }}>
+                    {llmFallbackRate}%
+                  </div>
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)" }}>{heuristicSessions} heuristic fallback</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Average Score per Role */}
+          <div className="card card-glass" style={{ padding: "1.5rem" }}>
+            <h3 style={{ fontSize: "0.95rem", fontWeight: 700, marginBottom: "0.25rem" }}>
+              Role Performance &amp; Score Benchmark
+            </h3>
+            <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginBottom: "1rem" }}>
+              Average candidate evaluation scores categorized by job role
+            </p>
+
+            {roleAverages.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "1.5rem", color: "var(--text-tertiary)", fontSize: "0.8rem" }}>
+                No completed scored sessions available yet.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                {roleAverages.map((item) => (
+                  <div key={item.role} style={{ padding: "0.75rem 1rem", backgroundColor: "var(--bg-secondary)", borderRadius: "var(--radius-md)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
+                      <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>{item.role}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>{item.count} session(s)</span>
+                        <span style={{ fontWeight: 700, fontSize: "0.9rem", color: "var(--color-primary)" }}>{item.avgScore}/100</span>
+                      </div>
+                    </div>
+                    <div style={{ width: "100%", height: "6px", backgroundColor: "var(--surface-border)", borderRadius: "999px", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${Math.min(100, item.avgScore)}%`,
+                          background: "var(--gradient-primary)",
+                          borderRadius: "999px",
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* AI vs. Human Recruiter Agreement View */}
+          <div className="card card-glass" style={{ padding: "1.5rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+              <div>
+                <h3 style={{ fontSize: "0.95rem", fontWeight: 700, marginBottom: "0.25rem" }}>
+                  AI vs. Human Recruiter Agreement Analytics
+                </h3>
+                <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                  Measuring alignment between automated AI evaluations and human recruiter override decisions
+                </p>
+              </div>
+              {agreementRate !== null && (
+                <div style={{ textAlign: "right" }}>
+                  <span className="badge badge-success" style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
+                    {agreementRate}% Alignment (±10 pts)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", margin: "1rem 0" }}>
+              <div style={{ padding: "0.75rem 1rem", backgroundColor: "var(--bg-secondary)", borderRadius: "var(--radius-md)" }}>
+                <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Reviewed Sessions</span>
+                <div style={{ fontSize: "1.35rem", fontWeight: 700, marginTop: "0.2rem" }}>
+                  {reviewedWithScores.length}
+                </div>
+                <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)" }}>with human recruiter score</span>
+              </div>
+              <div style={{ padding: "0.75rem 1rem", backgroundColor: "var(--bg-secondary)", borderRadius: "var(--radius-md)" }}>
+                <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Average Score Delta</span>
+                <div style={{ fontSize: "1.35rem", fontWeight: 700, marginTop: "0.2rem", color: avgScoreDelta !== null && avgScoreDelta <= 8 ? "var(--color-success)" : "var(--color-warning)" }}>
+                  {avgScoreDelta !== null ? `${avgScoreDelta} pts` : "N/A"}
+                </div>
+                <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)" }}>mean absolute difference</span>
+              </div>
+            </div>
+
+            {reviewedWithScores.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "1.5rem", color: "var(--text-tertiary)", fontSize: "0.8rem" }}>
+                No human recruiter reviews recorded yet. Recruiters can override scores in the session deep dive.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table className="admin-table" style={{ width: "100%", fontSize: "0.75rem" }}>
+                  <thead>
+                    <tr>
+                      <th>Candidate</th>
+                      <th>Role</th>
+                      <th>AI Score</th>
+                      <th>Human Score</th>
+                      <th>Delta</th>
+                      <th>Decision</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reviewedWithScores.slice(0, 5).map((rev) => {
+                      const delta = Math.round(Math.abs((rev.humanScore || 0) - (rev.totalScore || 0)) * 10) / 10;
+                      return (
+                        <tr key={rev.id}>
+                          <td><strong>{rev.user.name || rev.user.email}</strong></td>
+                          <td>{rev.jobRole}</td>
+                          <td><span className="badge badge-primary">{rev.totalScore}</span></td>
+                          <td><span className="badge badge-success">{rev.humanScore}</span></td>
+                          <td>
+                            <span style={{ color: delta <= 10 ? "var(--color-success)" : "var(--color-error)", fontWeight: 600 }}>
+                              {delta} pts
+                            </span>
+                          </td>
+                          <td>
+                            <span className="badge badge-muted">{rev.humanDecision}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
