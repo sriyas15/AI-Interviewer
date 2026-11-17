@@ -35,6 +35,7 @@ interface QuestionData {
   content: string;
   context: string | null;
   expectedTopics: string[];
+  hints?: string[];
 }
 
 interface InterviewRoomProps {
@@ -45,6 +46,8 @@ interface InterviewRoomProps {
     difficulty: "EASY" | "MEDIUM" | "HARD";
     topics: string[];
     status: string;
+    durationMinutes?: number;
+    startedAt?: string | Date | null;
   };
 }
 
@@ -67,7 +70,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   const [followUpCount, setFollowUpCount] = useState<number>(0);
   const [activeFollowUpPrompt, setActiveFollowUpPrompt] = useState<string | null>(null);
 
-  // Capped Hints State (C5)
+  // Capped Hints State with Per-Question Hints & Scoring Penalty
   const [hintsUsed, setHintsUsed] = useState<number>(0);
   const [revealedHints, setRevealedHints] = useState<string[]>([]);
   const [showHintConfirm, setShowHintConfirm] = useState<boolean>(false);
@@ -79,6 +82,16 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   const [secondsElapsed, setSecondsElapsed] = useState<number>(0);
   const STAGE_TIME_LIMIT_SECS = 360; // 6 mins per stage
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Overall Assessment Countdown Timer
+  const totalAssessmentDurationSecs = (interview.durationMinutes || 30) * 60;
+  const [assessmentTimeRemaining, setAssessmentTimeRemaining] = useState<number>(() => {
+    if (interview.startedAt) {
+      const elapsedSecs = Math.floor((Date.now() - new Date(interview.startedAt).getTime()) / 1000);
+      return Math.max(0, totalAssessmentDurationSecs - elapsedSecs);
+    }
+    return totalAssessmentDurationSecs;
+  });
 
   // Speech Recognition hook (C8)
   const {
@@ -203,6 +216,23 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     }
   }, [isListening, aiStatus]);
 
+  // Overall Assessment Countdown Timer (enforces total assessment duration)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setAssessmentTimeRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          // Auto-submit and conclude assessment when total time expires
+          router.push(`/interview/${interview.id}/report`);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [interview.id, router]);
+
   // Submit response & trigger state machine transition (C2)
   const handleSubmitAnswer = async () => {
     if (!currentQuestion) return;
@@ -223,6 +253,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         code: currentQuestion.type === "CODING" ? codeText : null,
         language: currentQuestion.type === "CODING" ? codeLanguage : null,
         durationMs: secondsElapsed * 1000,
+        hintsUsed,
       });
 
       if (!result.success) {
@@ -254,7 +285,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
       }
 
       // Otherwise, candidate completed this question.
-      // Candidate does NOT see scores/evaluation here (adhering to score-blind rule and C2 state machine).
+      // The room doesn't render per-question scores or feedback to avoid biasing the candidate or leaking rubrics.
       setIsTransitioning(true);
 
       if (result.isCompleted) {
@@ -274,30 +305,33 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     }
   };
 
-  // Capped Hints Request Handler (C5)
+  // Capped Hints Request Handler using per-question bank hints & logged penalty
   const handleUnlockHint = () => {
     if (hintsUsed >= 3 || !currentQuestion) return;
 
     const nextLevel = hintsUsed + 1;
+    const qHints = currentQuestion.hints || [];
     let newHintText = "";
 
-    if (nextLevel === 1) {
-      newHintText = `[Hint 1: Direction] Focus on break-down: identify the primary constraints and consider a 2-pointer or memoized approach.`;
+    if (nextLevel <= qHints.length && qHints[nextLevel - 1]) {
+      newHintText = `[Hint ${nextLevel}] ${qHints[nextLevel - 1]}`;
+    } else if (nextLevel === 1) {
+      newHintText = `[Hint 1: Direction] Clarify constraints and formulate initial edge-case bounds for ${interview.jobRole}.`;
     } else if (nextLevel === 2) {
-      newHintText = `[Hint 2: Strategy] Optimal time complexity is O(N) or O(N log N). Avoid quadratic nested loops by using a hash map or sorting first.`;
+      newHintText = `[Hint 2: Strategy] Analyze space/time algorithmic trade-offs. Consider whether pre-computation, memoization, or pointer manipulation applies.`;
     } else {
-      newHintText = `[Hint 3: Scaffold] Initialize state tracking, iterate once while checking complementary target values in constant time.`;
+      newHintText = `[Hint 3: Scaffold] Structure your modular functions, validate edge inputs, and draft clear invariants before submitting.`;
     }
 
     setHintsUsed(nextLevel);
     setRevealedHints((prev) => [...prev, newHintText]);
     setShowHintConfirm(false);
 
-    // Log hint penalty event (C5)
+    // Log hint penalty activity event
     logActivityEvent({
       interviewId: interview.id,
-      type: "SUSPICIOUS_TYPING",
-      description: `Candidate requested Hint Level ${nextLevel} (-${nextLevel * 5}% penalty applied).`,
+      type: "HINT_REQUESTED",
+      description: `Candidate requested Hint Level ${nextLevel} (-${nextLevel * 5}% scoring penalty applied).`,
     });
   };
 
@@ -322,6 +356,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
 
   const timeRemainingSecs = Math.max(0, STAGE_TIME_LIMIT_SECS - secondsElapsed);
   const isTimeRunningLow = timeRemainingSecs <= 60;
+  const isAssessmentTimeLow = assessmentTimeRemaining <= 300; // Under 5 minutes left
 
   return (
     <div className="flex-1 flex flex-col min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -342,18 +377,25 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
             </span>
           )}
 
-          {/* Question Stopwatch & Stage Time Limit Indicator (C2) */}
+          {/* Overall Assessment Countdown Timer */}
           <div
             className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border font-mono text-xs ${
-              isTimeRunningLow
-                ? "bg-red-500/15 border-red-500/40 text-red-400 animate-pulse"
+              isAssessmentTimeLow
+                ? "bg-red-500/15 border-red-500/40 text-red-400 animate-pulse font-bold"
                 : "bg-[var(--bg-secondary)] border-[var(--surface-border)] text-[var(--text-primary)]"
             }`}
-            title="Stage elapsed time / Recommended limit"
+            title="Total Assessment Time Remaining"
           >
-            <Clock size={13} className={isTimeRunningLow ? "text-red-400" : "text-[var(--text-tertiary)]"} />
-            <span>{formatTimer(secondsElapsed)}</span>
-            <span className="text-[var(--text-tertiary)] text-[10px]">/ 6m</span>
+            <Clock size={13} className={isAssessmentTimeLow ? "text-red-400" : "text-[var(--color-primary)]"} />
+            <span>Total: {formatTimer(assessmentTimeRemaining)}</span>
+          </div>
+
+          {/* Question Stopwatch */}
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[var(--surface-border)] bg-[var(--bg-tertiary)] font-mono text-xs text-[var(--text-secondary)]"
+            title="Current question elapsed time"
+          >
+            <span>Q: {formatTimer(secondsElapsed)}</span>
           </div>
 
           {/* Anti-cheat proctoring guard with fullscreen & throttling (C6) */}
