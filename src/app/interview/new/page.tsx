@@ -14,6 +14,11 @@ export default async function NewInterviewPage() {
     redirect("/login");
   }
 
+  // Candidate role gate: Only ADMIN can configure standalone interviews directly (Item 9 Option A)
+  if (session.user.role !== "ADMIN") {
+    redirect("/dashboard");
+  }
+
   return (
     <div className="setup-page">
       {/* Nav */}
