@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { signIn } from "next-auth/react";
 import { startInvitedInterviewAction } from "@/actions/invitation";
 import { ArrowRight, Loader2, AlertCircle } from "lucide-react";
 
@@ -19,6 +20,10 @@ export function InviteAcceptClient({ token }: InviteAcceptClientProps) {
     setError(null);
 
     try {
+      // 1. Authenticate candidate with single-use invite token session
+      await signIn("invite-token", { token, redirect: false });
+
+      // 2. Atomically claim invitation and initialize session
       const result = await startInvitedInterviewAction(token);
 
       if (!result.success || !result.interviewId) {
@@ -27,7 +32,8 @@ export function InviteAcceptClient({ token }: InviteAcceptClientProps) {
         return;
       }
 
-      router.push(`/interview/${result.interviewId}`);
+      // 3. Route candidate into the pre-flight Lobby (/start) for equipment checks & consent
+      router.push(`/interview/${result.interviewId}/start`);
     } catch (err: any) {
       console.error("handleStart error:", err);
       setError("An unexpected error occurred while launching the assessment.");
