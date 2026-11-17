@@ -15,8 +15,6 @@ import {
   ChevronDown,
   ChevronUp,
   Code2,
-  ArrowRight,
-  RotateCcw,
 } from "lucide-react";
 
 interface EvaluationData {
@@ -122,13 +120,6 @@ export function InterviewReportView({
             <Printer size={13} />
             <span>Print Report</span>
           </button>
-          <Link
-            href="/interview/new"
-            className="btn btn-primary btn-sm text-xs flex items-center gap-1.5"
-          >
-            <RotateCcw size={13} />
-            <span>Practice Another</span>
-          </Link>
         </div>
       </div>
 
@@ -479,13 +470,9 @@ export function InterviewReportView({
       </div>
 
       {/* Footer Navigation */}
-      <div className="pt-4 flex items-center justify-between no-print">
+      <div className="pt-4 flex items-center justify-start no-print">
         <Link href="/dashboard" className="btn btn-secondary">
           Return to Dashboard
-        </Link>
-        <Link href="/interview/new" className="btn btn-primary flex items-center gap-2">
-          <span>Start New Interview Session</span>
-          <ArrowRight size={16} />
         </Link>
       </div>
     </div>

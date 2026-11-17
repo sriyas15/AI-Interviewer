@@ -26,6 +26,14 @@ export async function createInterview(
     redirect("/login");
   }
 
+  // Role Gate: Reject self-creation by candidates (must use recruiter invite link)
+  if (session.user.role !== "ADMIN") {
+    return {
+      success: false,
+      error: "Candidate self-creation is disabled. Interviews must be initiated via recruiter invitation.",
+    };
+  }
+
   const validated = createInterviewSchema.safeParse(input);
 
   if (!validated.success) {
@@ -73,6 +81,10 @@ export async function startInterviewSession(
 
     if (interview.userId !== session.user.id) {
       return { success: false, error: "You are not authorized to access this interview." };
+    }
+
+    if (interview.status === "COMPLETED") {
+      return { success: false, error: "This interview has already been completed and submitted." };
     }
 
     // Update status to IN_PROGRESS if pending

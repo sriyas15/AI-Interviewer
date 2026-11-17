@@ -1,4 +1,5 @@
 import { getInvitationData } from "@/actions/invitation";
+import { auth } from "@/auth";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
@@ -21,7 +22,10 @@ interface InvitePageProps {
 
 export default async function InvitePage({ params }: InvitePageProps) {
   const { token } = await params;
-  const { invitation, error } = await getInvitationData(token);
+  const [{ invitation, accountStatus, error }, session] = await Promise.all([
+    getInvitationData(token),
+    auth(),
+  ]);
 
   if (error === "INVITATION_NOT_FOUND" || !invitation) {
     return notFound();
@@ -157,7 +161,14 @@ export default async function InvitePage({ params }: InvitePageProps) {
 
         {/* Start Assessment Action */}
         {!isExpired && !isRevoked && !isCompleted && (
-          <InviteAcceptClient token={token} />
+          <InviteAcceptClient
+            token={token}
+            candidateEmail={invitation.candidateEmail}
+            candidateName={invitation.candidateName || ""}
+            sessionEmail={session?.user?.email || null}
+            accountExists={accountStatus?.exists || false}
+            hasPassword={accountStatus?.hasPassword || false}
+          />
         )}
 
         <div style={{ marginTop: "1.5rem", textAlign: "center", fontSize: "0.75rem", color: "var(--text-tertiary)" }}>

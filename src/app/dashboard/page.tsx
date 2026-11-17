@@ -4,13 +4,11 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import {
   BrainCircuit,
-  Plus,
   LayoutDashboard,
   Shield,
   ArrowRight,
 } from "lucide-react";
 import { InterviewList } from "@/components/dashboard/interview-list";
-import { StatsGrid } from "@/components/dashboard/stats-grid";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { ProfileDropdown } from "@/components/auth/profile-dropdown";
 
@@ -44,12 +42,15 @@ export default async function DashboardPage(props: DashboardPageProps) {
         id: true,
         title: true,
         jobRole: true,
-        difficulty: true,
-        topics: true,
         status: true,
         createdAt: true,
         startedAt: true,
         completedAt: true,
+        invitation: {
+          select: {
+            expiresAt: true,
+          },
+        },
         _count: { select: { questions: true } },
       },
       orderBy: { createdAt: "desc" },
@@ -61,9 +62,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
   ]);
 
   const totalInterviews = interviews.length;
-  const completedInterviews = interviews.filter((i) => i.status === "COMPLETED").length;
-  const inProgressInterviews = interviews.filter((i) => i.status === "IN_PROGRESS").length;
-  const pendingInterviews = interviews.filter((i) => i.status === "PENDING").length;
 
   const displayName = user?.name || session.user.name || "Candidate";
   const firstName = displayName.split(" ")[0];
@@ -134,7 +132,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
             <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
               <Shield size={18} style={{ color: "#f59e0b", flexShrink: 0 }} />
               <span style={{ fontSize: "0.875rem", color: "#fef3c7" }}>
-                <strong>Admin Preview Mode:</strong> You are viewing the candidate practice view. Numerical scores and evaluation deep-dives are intentionally hidden here.
+                <strong>Admin Preview Mode:</strong> You are viewing the candidate portal. Self-serve practice setup, numerical scores, and evaluation deep-dives are intentionally hidden here.
               </span>
             </div>
             <Link
@@ -164,50 +162,16 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </h1>
             <p className="dashboard-subtitle">
               {isAdmin
-                ? "Candidate view simulation — test questions and practice interviews."
-                : "Track your practice sessions and keep improving your interview skills."}
+                ? "Candidate view simulation — preview assigned technical assessments."
+                : "Review your assigned technical assessments and track your submission status."}
             </p>
           </div>
-          <Link href="/interview/new" className="btn btn-primary">
-            <Plus size={18} />
-            <span>New Interview</span>
-          </Link>
         </div>
-
-        {/* ─── Stats Grid ─── */}
-        <StatsGrid
-          stats={[
-            {
-              label: "Total Sessions",
-              value: totalInterviews,
-              iconType: "book",
-              color: "primary",
-            },
-            {
-              label: "Completed",
-              value: completedInterviews,
-              iconType: "check",
-              color: "success",
-            },
-            {
-              label: "In Progress",
-              value: inProgressInterviews,
-              iconType: "clock",
-              color: "warning",
-            },
-            {
-              label: "Pending",
-              value: pendingInterviews,
-              iconType: "list",
-              color: "muted",
-            },
-          ]}
-        />
 
         {/* ─── Interview History ─── */}
         <div className="dashboard-section">
           <div className="section-header">
-            <h2 className="section-title-sm">Interview Sessions</h2>
+            <h2 className="section-title-sm">Assigned Assessments</h2>
             {totalInterviews > 0 && (
               <span className="badge badge-muted">{totalInterviews} total</span>
             )}

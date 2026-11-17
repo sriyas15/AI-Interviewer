@@ -1,22 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { formatDistanceToNow } from "date-fns";
-import { ChevronRight, Clock, Hash, Layers } from "lucide-react";
+import { formatDistanceToNow, format } from "date-fns";
+import { ChevronRight, Clock, Hash, Calendar } from "lucide-react";
 
 type InterviewStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
-type Difficulty = "EASY" | "MEDIUM" | "HARD";
 
 interface InterviewSummary {
   id: string;
   title: string;
   jobRole: string;
-  difficulty: Difficulty;
-  topics: string[];
   status: InterviewStatus;
   createdAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  invitation?: {
+    expiresAt: Date;
+  } | null;
   _count: { questions: number };
 }
 
@@ -46,24 +46,19 @@ const statusConfig: Record<
   },
 };
 
-const difficultyConfig: Record<
-  Difficulty,
-  { label: string; className: string }
-> = {
-  EASY: { label: "Easy", className: "badge-success" },
-  MEDIUM: { label: "Medium", className: "badge-warning" },
-  HARD: { label: "Hard", className: "badge-error" },
-};
-
 export function InterviewList({ interviews }: InterviewListProps) {
   return (
     <div className="interview-list">
       {interviews.map((interview) => {
         const status = statusConfig[interview.status];
-        const difficulty = difficultyConfig[interview.difficulty];
         const timeAgo = formatDistanceToNow(new Date(interview.createdAt), {
           addSuffix: true,
         });
+
+        const dueDate = interview.invitation?.expiresAt
+          ? new Date(interview.invitation.expiresAt)
+          : null;
+        const isPastDue = dueDate ? dueDate.getTime() < Date.now() : false;
 
         return (
           <Link
@@ -80,9 +75,6 @@ export function InterviewList({ interviews }: InterviewListProps) {
             <div className="interview-card-main">
               <div className="interview-card-top">
                 <div className="interview-card-badges">
-                  <span className={`badge ${difficulty.className}`}>
-                    {difficulty.label}
-                  </span>
                   <span className={`badge ${status.className}`}>
                     {status.label}
                   </span>
@@ -105,25 +97,21 @@ export function InterviewList({ interviews }: InterviewListProps) {
                 )}
                 <span className="meta-item">
                   <Clock size={13} />
-                  {timeAgo}
+                  Assigned {timeAgo}
                 </span>
+                {dueDate && (
+                  <span
+                    className="meta-item"
+                    style={{
+                      color: isPastDue && interview.status !== "COMPLETED" ? "var(--color-error)" : undefined,
+                    }}
+                  >
+                    <Calendar size={13} />
+                    Due: {format(dueDate, "MMM d, yyyy")}
+                    {isPastDue && interview.status !== "COMPLETED" ? " (Expired)" : ""}
+                  </span>
+                )}
               </div>
-
-              {interview.topics.length > 0 && (
-                <div className="interview-card-topics">
-                  <Layers size={13} style={{ color: "var(--text-tertiary)" }} />
-                  {interview.topics.slice(0, 4).map((topic) => (
-                    <span key={topic} className="topic-chip">
-                      {topic}
-                    </span>
-                  ))}
-                  {interview.topics.length > 4 && (
-                    <span className="topic-chip topic-chip-more">
-                      +{interview.topics.length - 4}
-                    </span>
-                  )}
-                </div>
-              )}
             </div>
           </Link>
         );
