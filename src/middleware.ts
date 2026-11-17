@@ -25,6 +25,11 @@ export default auth((req) => {
     pathname.startsWith("/reports") ||
     pathname.startsWith("/settings");
 
+  // Deactivated user check (Item 8)
+  if (isLoggedIn && (user as any)?.isActive === false) {
+    return NextResponse.redirect(new URL("/login?error=AccountDeactivated", req.nextUrl));
+  }
+
   // Redirect authenticated users away from /login, /register, etc.
   if (isAuthRoute && isLoggedIn) {
     const destination = role === "ADMIN" ? "/admin" : "/dashboard";
@@ -37,6 +42,11 @@ export default auth((req) => {
     return NextResponse.redirect(
       new URL(`/login?callbackUrl=${callbackUrl}`, req.nextUrl)
     );
+  }
+
+  // Candidate role gate: candidates cannot access /interview/new directly (Item 9)
+  if (pathname.startsWith("/interview/new") && role !== "ADMIN") {
+    return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
   }
 
   // Enforce role-based access: CANDIDATE cannot access /admin
