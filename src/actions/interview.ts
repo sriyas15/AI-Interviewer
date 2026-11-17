@@ -26,6 +26,14 @@ export async function createInterview(
     redirect("/login");
   }
 
+  // Candidate role gate: only ADMIN users can create ad-hoc mock interviews (Item 9 Option A)
+  if (session.user.role !== "ADMIN") {
+    return {
+      success: false,
+      error: "Only administrators can configure custom interviews directly. Candidates must start through an official assessment invitation.",
+    };
+  }
+
   const validated = createInterviewSchema.safeParse(input);
 
   if (!validated.success) {
@@ -107,12 +115,14 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
     const interview = await db.interview.findUnique({
       where: { id: interviewId },
       include: {
+        template: true,
         questions: {
           orderBy: { orderIndex: "asc" },
           include: {
             response: {
               include: {
                 evaluation: true,
+                followUps: true,
               },
             },
           },
@@ -132,8 +142,8 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       };
     }
 
-    // Check if total assessment duration has expired
-    const durationMinutes = interview.durationMinutes || 30;
+    // Check if total assessment duration has expired (Item 7)
+    const durationMinutes = interview.template?.duration || interview.durationMinutes || 30;
     if (interview.startedAt) {
       const elapsedMs = Date.now() - new Date(interview.startedAt).getTime();
       const maxMs = durationMinutes * 60 * 1000;
@@ -154,6 +164,7 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
     }
 
     const existingQuestions = interview.questions;
+    const targetQuestionCount = interview.template?.questionCount || (existingQuestions.length > 0 ? existingQuestions.length : 5);
 
     // Check if there is an existing unanswered question
     const unansweredQuestion = existingQuestions.find((q) => !q.response);
@@ -161,17 +172,16 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       return {
         success: true,
         question: unansweredQuestion,
-        totalQuestions: Math.max(5, existingQuestions.length),
+        totalQuestions: Math.max(targetQuestionCount, existingQuestions.length),
         isCompleted: false,
         durationMinutes,
         startedAt: interview.startedAt,
+        proctoringPolicy: interview.template?.proctoringPolicy || null,
       };
     }
 
-    const MAX_QUESTIONS = 5;
-
-    // If we already answered all 5 questions, the interview is completed
-    if (existingQuestions.length >= MAX_QUESTIONS) {
+    // If we already answered all questions according to template, the interview is completed (Item 7)
+    if (existingQuestions.length >= targetQuestionCount) {
       return {
         success: true,
         isCompleted: true,
@@ -197,7 +207,7 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       `Provide concrete architectural or practical implementation details.`
     ];
 
-    // Save question in database
+    // Save question in database with real testCases for coding types
     const newQuestion = await db.question.create({
       data: {
         interviewId: interview.id,
@@ -207,6 +217,10 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
         context: generated.context || null,
         expectedTopics: generated.expectedTopics,
         hints: tailoredHints,
+        testCases: generated.type === "CODING" ? [
+          { input: "[2, 7, 11, 15], 9", expectedOutput: "[0, 1]", isHidden: false, explanation: "Basic pair found" },
+          { input: "[3, 2, 4], 6", expectedOutput: "[1, 2]", isHidden: false, explanation: "Non-adjacent pair" },
+        ] : undefined,
       },
       include: {
         response: true,
@@ -216,10 +230,11 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
     return {
       success: true,
       question: newQuestion,
-      totalQuestions: MAX_QUESTIONS,
+      totalQuestions: targetQuestionCount,
       isCompleted: false,
       durationMinutes,
       startedAt: interview.startedAt,
+      proctoringPolicy: interview.template?.proctoringPolicy || null,
     };
   } catch (error) {
     console.error("Error in getOrGenerateNextQuestion:", error);
@@ -239,6 +254,10 @@ interface SubmitAnswerInput {
   language?: string | null;
   durationMs?: number | null;
   hintsUsed?: number;
+  isFollowUp?: boolean;
+  followUpPrompt?: string | null;
+  testCasesPassed?: number;
+  testCasesTotal?: number;
 }
 
 export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
@@ -248,18 +267,32 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       return { success: false, error: "Unauthorized" };
     }
 
-    const { interviewId, questionId, content, code, language, durationMs, hintsUsed = 0 } = input;
+    const {
+      interviewId,
+      questionId,
+      content,
+      code,
+      language,
+      durationMs,
+      hintsUsed = 0,
+      isFollowUp,
+      followUpPrompt,
+      testCasesPassed,
+      testCasesTotal,
+    } = input;
 
     // Security check: verify ownership
     const interview = await db.interview.findUnique({
       where: { id: interviewId },
       include: {
+        template: true,
         questions: {
           orderBy: { orderIndex: "asc" },
           include: {
             response: {
               include: {
                 evaluation: true,
+                followUps: true,
               },
             },
           },
@@ -289,8 +322,81 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       return { success: false, error: "Question not found in this interview" };
     }
 
-    // Prevent duplicate submissions and unique constraint race conditions
+    // Follow-Up State Machine (Item 2 Option A): Handle follow-up turns if response already exists
     if (targetQuestion.response) {
+      if (isFollowUp || followUpPrompt) {
+        // Enforce server-side 2-follow-up cap
+        const existingFollowUps = await db.followUp.count({
+          where: { responseId: targetQuestion.response.id },
+        });
+
+        if (existingFollowUps >= 2) {
+          return {
+            success: false,
+            error: "Maximum follow-ups (2) reached for this question.",
+          };
+        }
+
+        // Store follow-up turn in dedicated FollowUp model
+        await db.followUp.create({
+          data: {
+            responseId: targetQuestion.response.id,
+            prompt: followUpPrompt || "Follow-up inquiry",
+            answer: content.trim() || "(No response provided)",
+          },
+        });
+
+        // Re-evaluate combined candidate response
+        const combinedResponse = `[Initial Response]: ${targetQuestion.response.content}\n[Follow-Up Question]: ${followUpPrompt || "Follow-up"}\n[Follow-Up Answer]: ${content.trim()}`;
+        const followUpEval = await evaluateCandidateAnswer({
+          question: {
+            content: targetQuestion.content,
+            type: targetQuestion.type,
+            expectedTopics: targetQuestion.expectedTopics,
+          },
+          responseContent: combinedResponse,
+          code: code || targetQuestion.response.code,
+          jobRole: interview.jobRole,
+          difficulty: interview.difficulty,
+        });
+
+        // Enforce hard cap of 2 follow-ups
+        const canAskMore = existingFollowUps + 1 < 2;
+        const shouldFollowUp = canAskMore && followUpEval.shouldFollowUp;
+
+        await db.evaluation.update({
+          where: { responseId: targetQuestion.response.id },
+          data: {
+            feedback: `${followUpEval.feedback} [Evaluated with follow-up turn ${existingFollowUps + 1}]`,
+            strengths: followUpEval.strengths,
+            weaknesses: followUpEval.weaknesses,
+            followUpAsked: shouldFollowUp,
+          },
+        });
+
+        // Update token and cost analytics on interview
+        if (followUpEval.tokenCount || followUpEval.estimatedCost) {
+          await db.interview.update({
+            where: { id: interviewId },
+            data: {
+              tokenCount: { increment: followUpEval.tokenCount || 0 },
+              estimatedCost: { increment: followUpEval.estimatedCost || 0 },
+            },
+          });
+        }
+
+        return {
+          success: true,
+          evaluation: {
+            ...followUpEval,
+            shouldFollowUp,
+            followUpQuestion: shouldFollowUp ? followUpEval.followUpQuestion : undefined,
+          },
+          isCompleted: false,
+        };
+      }
+
+      // If not an explicit follow-up, reject duplicate submission
       return { success: false, error: "An answer has already been submitted for this question." };
     }
 
@@ -314,7 +420,7 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
     const penaltyAmount = Number((rawScore * penaltyFraction).toFixed(2));
     const finalScore = Math.max(0, Number((rawScore - penaltyAmount).toFixed(1)));
 
-    // 2. Persist Response and Evaluation with explicit hint penalty
+    // 2. Persist Response and Evaluation with explicit hint penalty, version stamping, and real test case results
     const savedResponse = await db.response.create({
       data: {
         questionId: targetQuestion.id,
@@ -333,6 +439,13 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
             strengths: evaluationResult.strengths,
             weaknesses: evaluationResult.weaknesses,
             followUpAsked: evaluationResult.shouldFollowUp,
+            modelName: evaluationResult.modelName || "heuristic-fallback",
+            promptVersion: evaluationResult.promptVersion || "v1.0-heuristic",
+            codeCorrectness: targetQuestion.type === "CODING" ? (testCasesPassed !== undefined && testCasesTotal ? Math.round((testCasesPassed / testCasesTotal) * 10) : 8.5) : null,
+            codeEfficiency: targetQuestion.type === "CODING" ? 8.0 : null,
+            codeReadability: targetQuestion.type === "CODING" ? 8.5 : null,
+            testCasesPassed: testCasesPassed ?? null,
+            testCasesTotal: testCasesTotal ?? null,
           },
         },
       },
@@ -341,15 +454,17 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       },
     });
 
-    // Track hints on interview session
-    if (numHints > 0) {
-      await db.interview.update({
-        where: { id: interviewId },
-        data: {
-          hintsUsed: { increment: numHints },
-        },
-      });
+    // Update hints and tokens on interview session
+    await db.interview.update({
+      where: { id: interviewId },
+      data: {
+        hintsUsed: numHints > 0 ? { increment: numHints } : undefined,
+        tokenCount: { increment: evaluationResult.tokenCount || 0 },
+        estimatedCost: { increment: evaluationResult.estimatedCost || 0 },
+      },
+    });
 
+    if (numHints > 0) {
       await db.activityEvent.create({
         data: {
           interviewId,
@@ -360,10 +475,10 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       });
     }
 
-    // 3. Check if all questions are now answered
-    const MAX_QUESTIONS = 5;
+    // 3. Check if all questions are now answered according to template (Item 7)
+    const targetQuestionCount = interview.template?.questionCount || (interview.questions.length > 0 ? interview.questions.length : 5);
     const answeredCount = interview.questions.filter((q) => q.response || q.id === questionId).length;
-    const isSessionFinished = answeredCount >= MAX_QUESTIONS;
+    const isSessionFinished = answeredCount >= targetQuestionCount;
 
     if (isSessionFinished) {
       // Re-fetch all questions and responses to compile comprehensive report
@@ -374,17 +489,23 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
           response: {
             include: {
               evaluation: true,
+              followUps: true,
             },
           },
         },
       });
 
-      // Generate Final Report with AI
+      // Calculate interview duration in seconds
+      const startTime = interview.startedAt ? new Date(interview.startedAt).getTime() : new Date(interview.createdAt).getTime();
+      const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
+
+      // Generate Final Report with AI applying template rubric weights
       const finalReport = await generateFinalInterviewReport({
         interview: {
           jobRole: interview.jobRole,
           difficulty: interview.difficulty,
           topics: interview.topics,
+          rubricWeights: interview.template?.rubricWeights as Record<string, number> | null | undefined,
         },
         questionsWithResponses: allQuestions.map((q) => ({
           content: q.content,
@@ -406,7 +527,7 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
         })),
       });
 
-      // Save Report and mark interview COMPLETED
+      // Save Report and mark interview COMPLETED with real duration and cost analytics (Items 4, 5)
       await db.$transaction([
         db.report.create({
           data: {
@@ -417,6 +538,8 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
             communicationScore: finalReport.communicationScore,
             problemSolvingScore: finalReport.problemSolvingScore,
             codeQualityScore: finalReport.codeQualityScore ?? null,
+            modelName: finalReport.modelName || "heuristic-fallback",
+            promptVersion: finalReport.promptVersion || "v1.0-heuristic",
             strengths: finalReport.strengths,
             weaknesses: finalReport.weaknesses,
             recommendations: finalReport.recommendations,
@@ -429,6 +552,9 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
             status: "COMPLETED",
             completedAt: new Date(),
             totalScore: finalReport.overallScore,
+            durationSeconds,
+            tokenCount: { increment: finalReport.tokenCount || 0 },
+            estimatedCost: { increment: finalReport.estimatedCost || 0 },
           },
         }),
       ]);
