@@ -42,7 +42,98 @@ async function main() {
   console.log(`👤 Created/found candidate: ${user.name} (${user.email})`);
   console.log(`🛡️ Created/found admin: ${adminUser.name} (${adminUser.email})`);
 
-  // 2. Create a completed mock interview with questions, responses, evaluations, and report
+  // 2. Seed diverse BankQuestions with per-question hints for random sampling
+  const bankQuestionsData = [
+    {
+      title: "React Reconciliation & Virtual DOM",
+      content: "Explain how React reconciliation works, the heuristic diffing assumptions, and why stable keys prevent UI remounting bugs.",
+      type: QuestionType.TECHNICAL,
+      difficulty: Difficulty.MEDIUM,
+      tags: ["frontend", "react", "architecture", "virtual-dom"],
+      expectedTopics: ["Virtual DOM", "Diffing heuristics", "Fiber tree", "Key stability"],
+      hints: [
+        "Contrast React's O(n) heuristic diffing against theoretical O(n^3) general tree diffing.",
+        "Discuss why index keys cause state leakage across dynamically sorted lists.",
+        "Explain how the Fiber work loop splits work between render and commit phases."
+      ],
+    },
+    {
+      title: "Implement Robust Async Debounce",
+      content: "Implement an asynchronous debounce utility in TypeScript that supports execution cancellation and returns a promise for trailing invocations.",
+      type: QuestionType.CODING,
+      difficulty: Difficulty.MEDIUM,
+      tags: ["frontend", "javascript", "typescript", "async"],
+      expectedTopics: ["Debounce", "Closures", "Promise handling", "Cancellation"],
+      hints: [
+        "Store the active timer ID in closure scope alongside references to pending resolve/reject handlers.",
+        "Expose a .cancel() method on the debounced function that clears the timer and rejects the pending promise.",
+        "Ensure the trailing callback forwards arguments using typed Parameters<T> generics."
+      ],
+    },
+    {
+      title: "Distributed Rate Limiter Design",
+      content: "Design a high-throughput, low-latency API rate limiting service that enforces tier-based rate limits across multiple stateless backend nodes.",
+      type: QuestionType.SYSTEM_DESIGN,
+      difficulty: Difficulty.HARD,
+      tags: ["backend", "system-design", "redis", "concurrency"],
+      expectedTopics: ["Token Bucket", "Sliding Window Log", "Redis Lua script", "Race conditions"],
+      hints: [
+        "Compare Token Bucket versus Sliding Window Counter for memory efficiency and spike tolerance.",
+        "Address race conditions between GET and INCR using Redis Lua scripts or atomic transactions.",
+        "Discuss fallback behavior if the distributed cache layer experiences network partitioning."
+      ],
+    },
+    {
+      title: "Database Indexing & Query Optimization",
+      content: "Explain B-Tree versus Hash indexes in relational databases like PostgreSQL. When would a composite index fail to accelerate a query?",
+      type: QuestionType.TECHNICAL,
+      difficulty: Difficulty.MEDIUM,
+      tags: ["backend", "database", "postgresql", "indexing"],
+      expectedTopics: ["B-Tree", "Composite Index", "Leftmost Prefix Rule", "Index Scan"],
+      hints: [
+        "Recall the leftmost prefix rule: queries that omit leading columns in a composite index cannot perform range searches.",
+        "Discuss sequential scans versus bitmap index scans when filtering low-cardinality values.",
+        "Explain how write amplification and vacuum overhead increase with redundant indexes."
+      ],
+    },
+  ];
+
+  for (const bq of bankQuestionsData) {
+    const existing = await prisma.bankQuestion.findFirst({
+      where: { title: bq.title },
+    });
+    if (!existing) {
+      await prisma.bankQuestion.create({
+        data: {
+          ...bq,
+          createdById: adminUser.id,
+        },
+      });
+    }
+  }
+
+  // 3. Seed sample Interview Invitation for candidate
+  const existingInvite = await prisma.interviewInvitation.findFirst({
+    where: { candidateEmail: "candidate@example.com" },
+  });
+
+  if (!existingInvite) {
+    await prisma.interviewInvitation.create({
+      data: {
+        token: "demo-invitation-token-123",
+        candidateEmail: "candidate@example.com",
+        candidateName: "Alex Morgan",
+        jobRole: "Senior Frontend Engineer",
+        difficulty: Difficulty.MEDIUM,
+        status: "INVITED",
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days in future
+        invitedById: adminUser.id,
+      },
+    });
+    console.log("📨 Seeded candidate assessment invitation: demo-invitation-token-123");
+  }
+
+  // 4. Create a completed mock interview with questions, responses, evaluations, and report
   const completedInterview = await prisma.interview.create({
     data: {
       userId: user.id,
