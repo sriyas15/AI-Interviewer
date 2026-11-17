@@ -84,51 +84,103 @@ export async function startInvitedInterviewAction(token: string) {
     userId = candidateUser.id;
   }
 
-  // Fetch bank questions if template exists or fallback to standard topics
+  // Fetch bank questions filtered by role, difficulty, or tags, and randomly sample them
+  const targetCount = invitation.template?.questionCount || 4;
+  const roleKeywords = invitation.jobRole.toLowerCase().split(/\s+/);
+
+  // Retrieve candidate pool of matching bank questions
+  const potentialQuestions = await db.bankQuestion.findMany({
+    where: {
+      difficulty: invitation.difficulty,
+    },
+  });
+
+  // Score & filter questions by role relevance
+  const matchingQuestions = potentialQuestions.filter((q) => {
+    const qText = `${q.title} ${q.content} ${q.tags.join(" ")}`.toLowerCase();
+    return roleKeywords.some((keyword) => qText.includes(keyword));
+  });
+
+  // Use matching pool if sufficient, otherwise combine with general pool
+  const candidatePool = matchingQuestions.length >= targetCount
+    ? matchingQuestions
+    : potentialQuestions.length > 0
+    ? Array.from(new Set([...matchingQuestions, ...potentialQuestions]))
+    : [];
+
+  // Random sampling (Fisher-Yates shuffle) so candidates don't get the same static questions
+  const shuffled = [...candidatePool];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  const sampledBankQuestions = shuffled.slice(0, targetCount);
+
   let starterQuestions: Array<{
     content: string;
     type: any;
     orderIndex: number;
     expectedTopics: string[];
+    context?: string | null;
+    hints: string[];
   }> = [];
 
-  const bankQuestions = await db.bankQuestion.findMany({
-    take: invitation.template?.questionCount || 4,
-    orderBy: { createdAt: "asc" },
-  });
-
-  if (bankQuestions.length > 0) {
-    starterQuestions = bankQuestions.map((bq, idx) => ({
+  if (sampledBankQuestions.length > 0) {
+    starterQuestions = sampledBankQuestions.map((bq, idx) => ({
       orderIndex: idx + 1,
       type: bq.type,
       content: bq.content,
+      context: bq.sampleCode || null,
       expectedTopics: bq.expectedTopics,
+      hints: bq.hints && bq.hints.length > 0
+        ? bq.hints
+        : [
+            `Focus on core ${invitation.jobRole} requirements and constraints.`,
+            `Analyze time/space complexity tradeoffs before finalizing your approach.`,
+            `Walk through a concrete example with edge cases.`
+          ],
     }));
   } else {
-    // Default curriculum
+    // Role-tailored default curriculum with specific hints per question
     starterQuestions = [
       {
         orderIndex: 1,
         type: "TECHNICAL",
         content: `Explain the core architectural principles you rely on when building scalable applications in ${invitation.jobRole}.`,
         expectedTopics: ["Architecture", "Scalability", "Best Practices"],
+        hints: [
+          `Consider decoupling, caching strategies, and data access layers.`,
+          `Address state management and latency bottlenecks in distributed environments.`,
+          `Discuss fault isolation, observability, and failover mechanisms.`
+        ],
       },
       {
         orderIndex: 2,
         type: "CODING",
         content: "Write a function that debounces asynchronous operations and handles cancellations gracefully.",
         expectedTopics: ["Debounce", "Closures", "Async/Await"],
+        hints: [
+          `Use a closure to capture and clear the active timeout timer.`,
+          `Attach a .cancel() method directly onto the returned debounced function.`,
+          `Properly forward arguments and preserve execution context in the trailing callback.`
+        ],
       },
       {
         orderIndex: 3,
         type: "BEHAVIORAL",
         content: "Describe a situation where you had a disagreement with a team member about a technical approach. How did you resolve it?",
         expectedTopics: ["Conflict Resolution", "Collaboration", "Communication"],
+        hints: [
+          `Structure your answer with the STAR framework (Situation, Task, Action, Result).`,
+          `Emphasize data-driven evaluation (benchmarks, RFCs) rather than personal preferences.`,
+          `Highlight the long-term impact on team velocity and architecture.`
+        ],
       },
     ];
   }
 
-  // Create the tailored Interview session
+  // Create the tailored Interview session with duration and hints
   const interview = await db.interview.create({
     data: {
       userId,
@@ -138,13 +190,17 @@ export async function startInvitedInterviewAction(token: string) {
       topics: [invitation.jobRole, "Core Competencies", "Problem Solving"],
       status: InterviewStatus.IN_PROGRESS,
       startedAt: new Date(),
+      durationMinutes: invitation.template?.duration || 30,
+      feedbackReleased: false,
       templateId: invitation.templateId || null,
       questions: {
         create: starterQuestions.map((q) => ({
           orderIndex: q.orderIndex,
           type: q.type,
           content: q.content,
+          context: q.context || null,
           expectedTopics: q.expectedTopics,
+          hints: q.hints,
         })),
       },
     },
