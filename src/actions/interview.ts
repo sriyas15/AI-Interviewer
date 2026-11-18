@@ -10,6 +10,9 @@ import {
   evaluateCandidateAnswer,
   generateFinalInterviewReport,
 } from "@/lib/ai/service";
+import { calculateHintPenalty, computeCodeCorrectnessScore } from "@/lib/scoring";
+import { executeCodeOnServer } from "@/lib/judge0";
+import { enqueueReportGeneration } from "@/lib/queue";
 
 export interface CreateInterviewResult {
   success: boolean;
@@ -58,6 +61,118 @@ export async function createInterview(
   });
 
   redirect(`/interview/${interview.id}/start`);
+}
+
+/**
+ * Candidate self-service action to start a PRACTICE interview
+ */
+export async function createPracticeInterviewAction(input: {
+  jobRole: string;
+  difficulty: "EASY" | "MEDIUM" | "HARD";
+  topics?: string[];
+}): Promise<{ success: boolean; interviewId?: string; error?: string }> {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return { success: false, error: "Unauthorized. Please sign in." };
+    }
+
+    const interview = await db.interview.create({
+      data: {
+        userId: session.user.id,
+        title: `${input.jobRole} Practice Interview`,
+        jobRole: input.jobRole,
+        difficulty: input.difficulty,
+        topics: input.topics && input.topics.length > 0 ? input.topics : [input.jobRole, "Core Skills"],
+        status: "PENDING",
+        mode: "PRACTICE",
+        durationMinutes: 30,
+      },
+    });
+
+    return { success: true, interviewId: interview.id };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Failed to create practice interview" };
+  }
+}
+
+/**
+ * Server-authoritative action to request the next progressive hint for a question
+ */
+export async function requestHintAction(input: {
+  interviewId: string;
+  questionId: string;
+}): Promise<{
+  success: boolean;
+  hint?: string;
+  hintsRevealed?: number;
+  penaltyPercent?: number;
+  error?: string;
+}> {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    const { interviewId, questionId } = input;
+    const interview = await db.interview.findUnique({
+      where: { id: interviewId },
+      include: { questions: true },
+    });
+
+    if (!interview || (interview.userId !== session.user.id && session.user.role !== "ADMIN")) {
+      return { success: false, error: "Interview not found or unauthorized" };
+    }
+
+    if (interview.status === "COMPLETED") {
+      return { success: false, error: "Interview is already completed" };
+    }
+
+    const question = interview.questions.find((q) => q.id === questionId);
+    if (!question) {
+      return { success: false, error: "Question not found" };
+    }
+
+    const currentRevealed = question.hintsRevealed || 0;
+    const totalHints = question.hints.length;
+
+    if (currentRevealed >= Math.min(3, totalHints)) {
+      return { success: false, error: "Maximum hints already revealed for this question." };
+    }
+
+    const nextIndex = currentRevealed;
+    const hintText = question.hints[nextIndex];
+    const newRevealedCount = currentRevealed + 1;
+
+    // Atomically increment hintsRevealed on question and hintsUsed on interview
+    await db.$transaction([
+      db.question.update({
+        where: { id: questionId },
+        data: { hintsRevealed: { increment: 1 } },
+      }),
+      db.interview.update({
+        where: { id: interviewId },
+        data: { hintsUsed: { increment: 1 } },
+      }),
+      db.activityEvent.create({
+        data: {
+          interviewId,
+          type: "HINT_REQUESTED",
+          description: `Hint ${newRevealedCount} requested (-${newRevealedCount * 5}% penalty applied to question score).`,
+        },
+      }),
+    ]);
+
+    return {
+      success: true,
+      hint: hintText,
+      hintsRevealed: newRevealedCount,
+      penaltyPercent: newRevealedCount * 5,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Failed to request hint" };
+  }
 }
 
 export async function startInterviewSession(
@@ -142,23 +257,17 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       };
     }
 
-    // Check if total assessment duration has expired (Item 7)
-    const durationMinutes = interview.template?.duration || interview.durationMinutes || 30;
+    // Check if total assessment duration has expired
+    const durationMinutes = (interview.template?.duration || interview.durationMinutes || 30) + (interview.extraTimeMinutes || 0);
     if (interview.startedAt) {
       const elapsedMs = Date.now() - new Date(interview.startedAt).getTime();
       const maxMs = durationMinutes * 60 * 1000;
       if (elapsedMs > maxMs) {
-        await db.interview.update({
-          where: { id: interview.id },
-          data: {
-            status: "COMPLETED",
-            completedAt: new Date(),
-          },
-        });
+        await enqueueReportGeneration(interview.id);
         return {
           success: true,
           isCompleted: true,
-          error: "Assessment time has expired.",
+          error: "Assessment time limit has expired. Your responses have been saved and final report is generating.",
         };
       }
     }
@@ -169,14 +278,23 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
     // Check if there is an existing unanswered question
     const unansweredQuestion = existingQuestions.find((q) => !q.response);
     if (unansweredQuestion) {
+      const sanitizedQuestion = {
+        ...unansweredQuestion,
+        hints: (unansweredQuestion.hints || []).slice(0, unansweredQuestion.hintsRevealed || 0),
+        hintsCount: (unansweredQuestion.hints || []).length,
+        hintsRevealed: unansweredQuestion.hintsRevealed || 0,
+        testCases: ((unansweredQuestion.testCases as any[]) || []).filter((tc) => !tc.isHidden),
+      };
+
       return {
         success: true,
-        question: unansweredQuestion,
+        question: sanitizedQuestion,
         totalQuestions: Math.max(targetQuestionCount, existingQuestions.length),
         isCompleted: false,
         durationMinutes,
         startedAt: interview.startedAt,
         proctoringPolicy: interview.template?.proctoringPolicy || null,
+        mode: interview.mode || "ASSESSMENT",
       };
     }
 
@@ -201,13 +319,13 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       })),
     });
 
-    const tailoredHints = [
+    const tailoredHints = generated.hints && generated.hints.length > 0 ? generated.hints : [
       `Review key ${interview.jobRole} constraints and edge conditions.`,
       `Consider time/space complexity optimization opportunities.`,
       `Provide concrete architectural or practical implementation details.`
     ];
 
-    // Save question in database with real testCases for coding types
+    // Save question in database with problem-tailored test cases
     const newQuestion = await db.question.create({
       data: {
         interviewId: interview.id,
@@ -217,24 +335,36 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
         context: generated.context || null,
         expectedTopics: generated.expectedTopics,
         hints: tailoredHints,
-        testCases: generated.type === "CODING" ? [
-          { input: "[2, 7, 11, 15], 9", expectedOutput: "[0, 1]", isHidden: false, explanation: "Basic pair found" },
-          { input: "[3, 2, 4], 6", expectedOutput: "[1, 2]", isHidden: false, explanation: "Non-adjacent pair" },
-        ] : undefined,
+        hintsRevealed: 0,
+        starterCode: generated.starterCode ? { default: generated.starterCode } : undefined,
+        testCases: generated.testCases ?? (generated.type === "CODING" ? [
+          { input: "[[1,3],[2,6],[8,10],[15,18]]", expectedOutput: [[1,6],[8,10],[15,18]], isHidden: false, explanation: "Standard merge" },
+          { input: "[[1,4],[4,5]]", expectedOutput: [[1,5]], isHidden: false, explanation: "Adjacent boundary" },
+          { input: "[[1,4],[0,4]]", expectedOutput: [[0,4]], isHidden: true, explanation: "Enclosing interval" }
+        ] : undefined),
       },
       include: {
         response: true,
       },
     });
 
+    const sanitizedNewQuestion = {
+      ...newQuestion,
+      hints: (newQuestion.hints || []).slice(0, newQuestion.hintsRevealed || 0),
+      hintsCount: (newQuestion.hints || []).length,
+      hintsRevealed: newQuestion.hintsRevealed || 0,
+      testCases: ((newQuestion.testCases as any[]) || []).filter((tc) => !tc.isHidden),
+    };
+
     return {
       success: true,
-      question: newQuestion,
+      question: sanitizedNewQuestion,
       totalQuestions: targetQuestionCount,
       isCompleted: false,
       durationMinutes,
       startedAt: interview.startedAt,
       proctoringPolicy: interview.template?.proctoringPolicy || null,
+      mode: interview.mode || "ASSESSMENT",
     };
   } catch (error) {
     console.error("Error in getOrGenerateNextQuestion:", error);
@@ -309,6 +439,21 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       return { success: false, error: "This interview has already been completed." };
     }
 
+    // Check if total assessment duration has expired
+    const durationMinutes = (interview.template?.duration || interview.durationMinutes || 30) + (interview.extraTimeMinutes || 0);
+    if (interview.startedAt) {
+      const elapsedMs = Date.now() - new Date(interview.startedAt).getTime();
+      const maxMs = durationMinutes * 60 * 1000;
+      if (elapsedMs > maxMs) {
+        await enqueueReportGeneration(interview.id);
+        return {
+          success: false,
+          error: "Assessment time limit has expired. Your responses have been saved.",
+          isCompleted: true,
+        };
+      }
+    }
+
     // Input payload size constraints against DoS / memory exhaustion
     if (content && content.length > 20000) {
       return { success: false, error: "Answer text exceeds maximum limit of 20,000 characters." };
@@ -322,7 +467,10 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
       return { success: false, error: "Question not found in this interview" };
     }
 
-    // Follow-Up State Machine (Item 2 Option A): Handle follow-up turns if response already exists
+    // Authoritative hints count tracked on server
+    const numHints = targetQuestion.hintsRevealed || 0;
+
+    // Follow-Up State Machine: Handle follow-up turns if response already exists
     if (targetQuestion.response) {
       if (isFollowUp || followUpPrompt) {
         // Enforce server-side 2-follow-up cap
@@ -364,9 +512,14 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
         const canAskMore = existingFollowUps + 1 < 2;
         const shouldFollowUp = canAskMore && followUpEval.shouldFollowUp;
 
+        // Apply hint penalty to updated follow-up score
+        const { penaltyAmount: fuPenalty, finalScore: fuFinalScore } = calculateHintPenalty(followUpEval.score, numHints);
+
+        // Update evaluation with real recalculated score
         await db.evaluation.update({
           where: { responseId: targetQuestion.response.id },
           data: {
+            score: fuFinalScore, // Score updated!
             feedback: `${followUpEval.feedback} [Evaluated with follow-up turn ${existingFollowUps + 1}]`,
             strengths: followUpEval.strengths,
             weaknesses: followUpEval.weaknesses,
@@ -389,6 +542,7 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
           success: true,
           evaluation: {
             ...followUpEval,
+            score: fuFinalScore,
             shouldFollowUp,
             followUpQuestion: shouldFollowUp ? followUpEval.followUpQuestion : undefined,
           },
@@ -414,13 +568,23 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
     });
 
     // 1b. Apply hint penalty: 1 hint = -5%, 2 hints = -10%, 3 hints = -15%
-    const numHints = Math.max(0, Math.min(3, hintsUsed));
-    const penaltyFraction = numHints === 1 ? 0.05 : numHints === 2 ? 0.10 : numHints >= 3 ? 0.15 : 0;
-    const rawScore = evaluationResult.score;
-    const penaltyAmount = Number((rawScore * penaltyFraction).toFixed(2));
-    const finalScore = Math.max(0, Number((rawScore - penaltyAmount).toFixed(1)));
+    const { penaltyAmount, finalScore, penaltyFraction } = calculateHintPenalty(evaluationResult.score, numHints);
 
-    // 2. Persist Response and Evaluation with explicit hint penalty, version stamping, and real test case results
+    // 1c. Server-Side Execution of Test Cases via Judge0 / Isolated Sandbox
+    let verifiedPassed: number | null = null;
+    let verifiedTotal: number | null = null;
+    if (targetQuestion.type === "CODING" && code) {
+      const execResult = await executeCodeOnServer(
+        code,
+        (targetQuestion.testCases as any[]) || [],
+        language || "javascript"
+      );
+      verifiedPassed = execResult.passed;
+      verifiedTotal = execResult.total;
+    }
+    const codeCorrectness = computeCodeCorrectnessScore(verifiedPassed, verifiedTotal);
+
+    // 2. Persist Response and Evaluation with explicit hint penalty, version stamping, and verified test results
     const savedResponse = await db.response.create({
       data: {
         questionId: targetQuestion.id,
@@ -441,11 +605,11 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
             followUpAsked: evaluationResult.shouldFollowUp,
             modelName: evaluationResult.modelName || "heuristic-fallback",
             promptVersion: evaluationResult.promptVersion || "v1.0-heuristic",
-            codeCorrectness: targetQuestion.type === "CODING" ? (testCasesPassed !== undefined && testCasesTotal ? Math.round((testCasesPassed / testCasesTotal) * 10) : 8.5) : null,
-            codeEfficiency: targetQuestion.type === "CODING" ? 8.0 : null,
-            codeReadability: targetQuestion.type === "CODING" ? 8.5 : null,
-            testCasesPassed: testCasesPassed ?? null,
-            testCasesTotal: testCasesTotal ?? null,
+            codeCorrectness,
+            codeEfficiency: null,
+            codeReadability: null,
+            testCasesPassed: verifiedPassed,
+            testCasesTotal: verifiedTotal,
           },
         },
       },
@@ -458,117 +622,42 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
     await db.interview.update({
       where: { id: interviewId },
       data: {
-        hintsUsed: numHints > 0 ? { increment: numHints } : undefined,
         tokenCount: { increment: evaluationResult.tokenCount || 0 },
         estimatedCost: { increment: evaluationResult.estimatedCost || 0 },
       },
     });
 
-    if (numHints > 0) {
-      await db.activityEvent.create({
-        data: {
-          interviewId,
-          type: "HINT_REQUESTED",
-          description: `Candidate used ${numHints} hint(s) on Question #${targetQuestion.orderIndex} (-${Math.round(penaltyFraction * 100)}% scoring penalty applied).`,
-          metadata: { hintsUsed: numHints, penaltyScore: penaltyAmount, questionId: targetQuestion.id },
-        },
-      });
-    }
-
-    // 3. Check if all questions are now answered according to template (Item 7)
+    // 3. Check if all questions are now answered according to template
     const targetQuestionCount = interview.template?.questionCount || (interview.questions.length > 0 ? interview.questions.length : 5);
     const answeredCount = interview.questions.filter((q) => q.response || q.id === questionId).length;
     const isSessionFinished = answeredCount >= targetQuestionCount;
 
     if (isSessionFinished) {
-      // Re-fetch all questions and responses to compile comprehensive report
-      const allQuestions = await db.question.findMany({
-        where: { interviewId },
-        orderBy: { orderIndex: "asc" },
-        include: {
-          response: {
-            include: {
-              evaluation: true,
-              followUps: true,
-            },
-          },
-        },
-      });
-
-      // Calculate interview duration in seconds
       const startTime = interview.startedAt ? new Date(interview.startedAt).getTime() : new Date(interview.createdAt).getTime();
       const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
 
-      // Generate Final Report with AI applying template rubric weights
-      const finalReport = await generateFinalInterviewReport({
-        interview: {
-          jobRole: interview.jobRole,
-          difficulty: interview.difficulty,
-          topics: interview.topics,
-          rubricWeights: interview.template?.rubricWeights as Record<string, number> | null | undefined,
+      await db.interview.update({
+        where: { id: interview.id },
+        data: {
+          durationSeconds,
+          status: "COMPLETED",
+          completedAt: new Date(),
         },
-        questionsWithResponses: allQuestions.map((q) => ({
-          content: q.content,
-          type: q.type,
-          response: q.response
-            ? {
-                content: q.response.content,
-                code: q.response.code,
-                evaluation: q.response.evaluation
-                  ? {
-                      score: q.response.evaluation.score,
-                      feedback: q.response.evaluation.feedback,
-                      strengths: q.response.evaluation.strengths,
-                      weaknesses: q.response.evaluation.weaknesses,
-                    }
-                  : null,
-              }
-            : null,
-        })),
       });
 
-      // Save Report and mark interview COMPLETED with real duration and cost analytics (Items 4, 5)
-      await db.$transaction([
-        db.report.create({
-          data: {
-            interviewId: interview.id,
-            overallScore: finalReport.overallScore,
-            summary: finalReport.summary,
-            technicalScore: finalReport.technicalScore,
-            communicationScore: finalReport.communicationScore,
-            problemSolvingScore: finalReport.problemSolvingScore,
-            codeQualityScore: finalReport.codeQualityScore ?? null,
-            modelName: finalReport.modelName || "heuristic-fallback",
-            promptVersion: finalReport.promptVersion || "v1.0-heuristic",
-            strengths: finalReport.strengths,
-            weaknesses: finalReport.weaknesses,
-            recommendations: finalReport.recommendations,
-            detailedFeedback: finalReport as unknown as object,
-          },
-        }),
-        db.interview.update({
-          where: { id: interview.id },
-          data: {
-            status: "COMPLETED",
-            completedAt: new Date(),
-            totalScore: finalReport.overallScore,
-            durationSeconds,
-            tokenCount: { increment: finalReport.tokenCount || 0 },
-            estimatedCost: { increment: finalReport.estimatedCost || 0 },
-          },
-        }),
-      ]);
+      // Enqueue final report compilation, PDF generation, and notifications in the background
+      await enqueueReportGeneration(interview.id);
 
       return {
         success: true,
-        evaluation: evaluationResult,
+        evaluation: savedResponse.evaluation,
         isCompleted: true,
       };
     }
 
     return {
       success: true,
-      evaluation: evaluationResult,
+      evaluation: savedResponse.evaluation,
       isCompleted: false,
     };
   } catch (error) {
