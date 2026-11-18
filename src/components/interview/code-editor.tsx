@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import dynamic from "next/dynamic";
 import {
   Play,
   RotateCcw,
@@ -13,7 +14,19 @@ import {
   Check,
   X,
   Layers,
+  Server,
 } from "lucide-react";
+
+// Dynamic import of Monaco Editor with SSR disabled
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex flex-col items-center justify-center h-full min-h-[300px] text-xs text-[var(--text-tertiary)] gap-2">
+      <Loader2 size={20} className="animate-spin text-[var(--color-primary)]" />
+      <span>Loading Code Editor...</span>
+    </div>
+  ),
+});
 
 export interface TestCase {
   input: string;
@@ -45,7 +58,36 @@ interface CodeEditorProps {
   onLanguageChange?: (lang: string) => void;
   sampleTestCases?: TestCase[];
   onTestResultsChange?: (summary: { passed: number; total: number; results: TestResult[] }) => void;
+  isAssessment?: boolean;
+  blockPaste?: boolean;
 }
+
+const STARTER_CODE_TEMPLATES: Record<string, string> = {
+  javascript: `function solution(input) {
+  // Write your JavaScript solution here
+  return input;
+}`,
+  typescript: `function solution(input: any): any {
+  // Write your TypeScript solution here
+  return input;
+}`,
+  python: `def solution(input):
+    # Write your Python solution here
+    return input`,
+  java: `public class Solution {
+    public static Object solution(Object input) {
+        // Write your Java solution here
+        return input;
+    }
+}`,
+  cpp: `#include <iostream>
+using namespace std;
+
+int solution(int input) {
+    // Write your C++ solution here
+    return input;
+}`,
+};
 
 export function CodeEditor({
   value,
@@ -57,39 +99,55 @@ export function CodeEditor({
     { input: "[3, 2, 4], 6", expectedOutput: "[1, 2]" },
   ],
   onTestResultsChange,
+  isAssessment = false,
+  blockPaste = false,
 }: CodeEditorProps) {
   const [output, setOutput] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [executionTime, setExecutionTime] = useState<number | null>(null);
   const [hasError, setHasError] = useState(false);
 
-  // Tab: "console" | "tests" | "history" (C4)
   const [activeBottomTab, setActiveBottomTab] = useState<"console" | "tests" | "history">("console");
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   const [testResults, setTestResults] = useState<
-    Array<{ input: string; expected: string; actual: string; passed: boolean }>
+    Array<{ input: string; expected: string; actual: string; passed: boolean; isHidden?: boolean }>
   >([]);
 
-  const gutterRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<any>(null);
 
-  // Handle Tab key to insert 2 spaces
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const target = e.currentTarget;
-      const start = target.selectionStart;
-      const end = target.selectionEnd;
-      const newValue = value.substring(0, start) + "  " + value.substring(end);
-      onChange(newValue);
+  const handleEditorDidMount = (editor: any) => {
+    editorRef.current = editor;
 
-      setTimeout(() => {
-        target.selectionStart = target.selectionEnd = start + 2;
-      }, 0);
+    // Enforce paste blocking if required by proctoring policy
+    if (blockPaste) {
+      editor.onKeyDown((e: any) => {
+        // Ctrl+V (key code 86) or Cmd+V
+        if ((e.ctrlKey || e.metaKey) && e.keyCode === 86) {
+          e.preventDefault();
+          e.stopPropagation();
+          setOutput("[PROCTORING POLICY] Pasting code is restricted in assessment mode. Please type your solution.");
+          setHasError(true);
+        }
+      });
     }
   };
 
+  const handleLanguageSwitch = (newLang: string) => {
+    onLanguageChange?.(newLang);
+    if (!value.trim() && STARTER_CODE_TEMPLATES[newLang]) {
+      onChange(STARTER_CODE_TEMPLATES[newLang]);
+    }
+  };
+
+  const handleResetStarter = () => {
+    const template = STARTER_CODE_TEMPLATES[language] || STARTER_CODE_TEMPLATES.javascript;
+    onChange(template);
+    setOutput("Editor reset to starter template.");
+    setHasError(false);
+  };
+
   // Safe Sandboxed In-Browser Execution via Web Worker
-  const handleRunCode = async () => {
+  const handleRunSamples = async () => {
     setIsRunning(true);
     setOutput(null);
     setHasError(false);
@@ -111,7 +169,6 @@ export function CodeEditor({
         return;
       }
 
-      // Pre-process TypeScript type annotations to run smoothly in standard JavaScript engine
       let executableCode = value;
       if (language === "typescript") {
         executableCode = executableCode
@@ -120,7 +177,6 @@ export function CodeEditor({
           .replace(/\):\s*[A-Za-z0-9_$]+(?:\[\])?\s*\{/g, ") {");
       }
 
-      // Extract candidate function declarations
       const fnRegex = /(?:function\s+([a-zA-Z0-9_$]+)|(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(?:function|\([^)]*\)\s*=>|[a-zA-Z0-9_$]+\s*=>))/g;
       const candidateNames: string[] = [];
       let match;
@@ -163,7 +219,6 @@ export function CodeEditor({
             var normExpected = String(expected).trim().replace(/\\s+/g, '');
 
             if (normActual === normExpected) return true;
-
             if ((actual === true || actual === false) && normActual.toLowerCase() === normExpected.toLowerCase()) return true;
 
             var numActual = Number(actual);
@@ -177,16 +232,13 @@ export function CodeEditor({
               var pExpected = JSON.parse(normExpected);
               return JSON.stringify(pActual) === JSON.stringify(pExpected);
             } catch(e) {}
-
             return false;
           }
 
           try {
-            // Execute candidate code and resolve entry function
-            var runner = new Function(
-              'customConsole',
-              'var console = customConsole;\\n' +
-              code + '\\n' +
+            var runner = new Function('console',
+              '"use strict";\\n' +
+              code + '\\n;\\n' +
               'var names = ' + JSON.stringify(candidateNames) + '.concat(["twoSum", "solution", "solve", "debounce", "isValid", "mergeIntervals", "findMedianSortedArrays"]);\\n' +
               'for (var i = 0; i < names.length; i++) {\\n' +
               '  try {\\n' +
@@ -198,7 +250,6 @@ export function CodeEditor({
             );
 
             var entryFn = runner(customConsole);
-
             var testResults = [];
             if (testCases && testCases.length > 0) {
               if (!entryFn) {
@@ -226,9 +277,7 @@ export function CodeEditor({
                         args = [tc.input];
                       }
                     }
-                    if (!Array.isArray(args)) {
-                      args = [args];
-                    }
+                    if (!Array.isArray(args)) args = [args];
 
                     var actual = entryFn.apply(null, args);
                     var actualStr = actual === undefined ? "undefined" : (typeof actual === "object" ? JSON.stringify(actual) : String(actual));
@@ -259,11 +308,11 @@ export function CodeEditor({
               logs: logs,
               testResults: testResults
             });
-          } catch (err) {
+          } catch(err) {
             self.postMessage({
               success: false,
-              error: err.message,
-              logs: logs
+              logs: logs,
+              error: err.message
             });
           }
         };
@@ -276,24 +325,11 @@ export function CodeEditor({
       const timeoutId = setTimeout(() => {
         worker.terminate();
         URL.revokeObjectURL(workerUrl);
-        setExecutionTime(3000);
-        const timeoutMsg = "Execution timed out (3000ms limit exceeded).";
-        setOutput(timeoutMsg);
+        setExecutionTime(2000);
+        setOutput("Execution timed out after 2000ms. Check for infinite loops or heavy operations.");
         setHasError(true);
         setIsRunning(false);
-
-        // Record history entry
-        setRunHistory((prev) => [
-          {
-            id: String(Date.now()),
-            timestamp: new Date().toLocaleTimeString(),
-            status: "TIMEOUT",
-            output: timeoutMsg,
-            durationMs: 3000,
-          },
-          ...prev.slice(0, 9),
-        ]);
-      }, 3000);
+      }, 2000);
 
       worker.onmessage = (e) => {
         clearTimeout(timeoutId);
@@ -310,7 +346,6 @@ export function CodeEditor({
           setOutput(out);
           setHasError(false);
 
-          // Real test evaluation against provided bank test cases
           if (evaluatedTests && evaluatedTests.length > 0) {
             setTestResults(evaluatedTests);
             const passedCount = evaluatedTests.filter((r: any) => r.passed).length;
@@ -321,7 +356,6 @@ export function CodeEditor({
             });
           }
 
-          // Record run history (C4)
           setRunHistory((prev) => [
             {
               id: String(Date.now()),
@@ -355,282 +389,256 @@ export function CodeEditor({
         clearTimeout(timeoutId);
         worker.terminate();
         URL.revokeObjectURL(workerUrl);
-
         const elapsed = Math.round(performance.now() - startTime);
         setExecutionTime(elapsed);
-        const errMsg = `Runtime Error: ${e.message || "Script execution failed."}`;
-        setOutput(errMsg);
+        setOutput(`Runtime Error: ${e.message || "Script execution failed."}`);
         setHasError(true);
         setIsRunning(false);
       };
 
       worker.postMessage({
         code: executableCode,
-        testCases: sampleTestCases,
-        candidateNames: candidateNames,
+        testCases: sampleTestCases.filter((tc) => !tc.isHidden),
+        candidateNames,
       });
     } catch (err: any) {
-      const elapsed = Math.round(performance.now() - startTime);
-      setExecutionTime(elapsed);
-      setOutput(`Runtime Error: ${err.message}`);
+      setOutput(`Failed to run script: ${err.message}`);
       setHasError(true);
       setIsRunning(false);
     }
   };
 
-  const lineCount = Math.max(12, value.split("\n").length);
-  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
+  const publicTestCases = sampleTestCases.filter((tc) => !tc.isHidden);
+  const passedTestsCount = testResults.filter((r) => r.passed).length;
 
   return (
-    <div className="card border border-[var(--surface-border)] rounded-xl overflow-hidden flex flex-col bg-[#0f0f17]">
-      {/* Editor Top Bar */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-[var(--surface)] border-b border-[var(--surface-border)]">
+    <div className="flex flex-col h-full bg-[#1e1e1e] border border-[var(--surface-border)] rounded-xl overflow-hidden shadow-sm">
+      {/* ─── Top Toolbar ─── */}
+      <div className="flex items-center justify-between px-3 py-2 bg-[#252526] border-b border-[#333333] select-none text-xs">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs text-[var(--color-primary)] font-semibold">
-            <Code2 size={16} />
-            <span>Interactive Code Editor</span>
+          <div className="flex items-center gap-1.5 text-[#cccccc] font-medium">
+            <Code2 size={14} className="text-[var(--color-primary)]" />
+            <span>Monaco Workspace</span>
           </div>
 
-          {onLanguageChange && (
-            <select
-              value={language}
-              onChange={(e) => onLanguageChange(e.target.value)}
-              className="px-2 py-1 rounded bg-[var(--bg-tertiary)] text-[var(--text-secondary)] text-xs border border-[var(--surface-border)] focus:outline-none focus:border-[var(--color-primary)]"
-            >
-              <option value="javascript">JavaScript</option>
-              <option value="typescript">TypeScript</option>
-              <option value="python">Python</option>
-            </select>
-          )}
+          {/* Language Selector */}
+          <select
+            value={language}
+            onChange={(e) => handleLanguageSwitch(e.target.value)}
+            className="bg-[#1e1e1e] text-[#cccccc] text-xs px-2 py-1 rounded border border-[#444444] focus:outline-none focus:border-[var(--color-primary)]"
+            aria-label="Programming Language"
+          >
+            <option value="javascript">JavaScript (Node.js)</option>
+            <option value="typescript">TypeScript</option>
+            <option value="python">Python 3</option>
+            <option value="java">Java 17</option>
+            <option value="cpp">C++ (GCC)</option>
+          </select>
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            type="button"
-            onClick={() => {
-              setOutput(null);
-              setExecutionTime(null);
-            }}
-            title="Clear Console Output"
-            className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] text-xs flex items-center gap-1"
+            onClick={handleResetStarter}
+            className="flex items-center gap-1 text-[#888888] hover:text-[#cccccc] transition-colors px-2 py-1 rounded hover:bg-[#333333]"
+            title="Reset code to starter template"
           >
             <RotateCcw size={12} />
-            <span className="hidden sm:inline">Reset</span>
+            <span>Reset</span>
           </button>
 
           <button
-            type="button"
-            onClick={handleRunCode}
-            disabled={isRunning || !value.trim()}
-            className="btn btn-primary btn-sm text-xs py-1 px-3 flex items-center gap-1.5 shadow"
+            onClick={handleRunSamples}
+            disabled={isRunning}
+            className="btn btn-primary btn-sm text-xs py-1 px-3 flex items-center gap-1.5"
+            title="Execute code in client Web Worker against public sample test cases"
           >
             {isRunning ? (
-              <Loader2 size={12} className="animate-spin" />
+              <>
+                <Loader2 size={12} className="animate-spin" />
+                <span>Running...</span>
+              </>
             ) : (
-              <Play size={12} className="fill-current" />
+              <>
+                <Play size={12} />
+                <span>Run Samples</span>
+              </>
             )}
-            <span>{isRunning ? "Testing..." : "Run Tests"}</span>
           </button>
         </div>
       </div>
 
-      {/* Code Textarea & Gutter with Synchronized Scrolling and Strict Alignment */}
-      <div className="flex relative font-mono text-xs overflow-hidden min-h-[220px] max-h-[380px]">
-        {/* Line Numbers Gutter */}
-        <div
-          ref={gutterRef}
-          className="py-3 px-3 select-none text-right text-[var(--text-tertiary)] bg-[var(--bg-secondary)] border-r border-[var(--surface-border)] shrink-0 min-w-[44px] overflow-hidden font-mono text-xs"
-          aria-hidden="true"
-        >
-          {lineNumbers.map((num) => (
-            <div key={num} className="leading-[20px] h-[20px]">
-              {num}
-            </div>
-          ))}
-        </div>
-
-        {/* Text Area */}
-        <div className="relative flex-1 overflow-hidden">
-          <textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onScroll={(e) => {
-              if (gutterRef.current) {
-                gutterRef.current.scrollTop = e.currentTarget.scrollTop;
-              }
-            }}
-            wrap="off"
-            spellCheck="false"
-            autoCapitalize="off"
-            autoComplete="off"
-            autoCorrect="off"
-            placeholder={
-              language === "python"
-                ? "# Write your solution here...\ndef solution(nums, target):\n    # Your logic\n    return result"
-                : "// Write your solution here...\nfunction twoSum(nums, target) {\n  // Your logic\n  return [0, 1];\n}"
-            }
-            className="w-full h-full py-3 px-3 bg-transparent text-[var(--text-primary)] leading-[20px] resize-none border-none outline-none font-mono text-xs whitespace-pre overflow-auto"
-            style={{ tabSize: 2 }}
-          />
-        </div>
+      {/* ─── Monaco Editor Container ─── */}
+      <div className="flex-1 min-h-[300px] relative">
+        <MonacoEditor
+          height="100%"
+          language={language === "cpp" ? "cpp" : language}
+          value={value}
+          theme="vs-dark"
+          onChange={(newVal) => onChange(newVal || "")}
+          onMount={handleEditorDidMount}
+          options={{
+            fontSize: 13,
+            fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Monaco, Consolas, monospace",
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            lineNumbers: "on",
+            tabSize: 2,
+            automaticLayout: true,
+            // Turn off autocomplete and suggestions in assessment mode
+            quickSuggestions: !isAssessment,
+            suggestOnTriggerCharacters: !isAssessment,
+            snippetSuggestions: isAssessment ? "none" : "inline",
+            wordBasedSuggestions: isAssessment ? "off" : "matchingDocuments",
+            contextmenu: !blockPaste,
+          }}
+        />
       </div>
 
-      {/* Bottom Tabs: Console, Sample Tests, Run History (C4) */}
-      <div className="border-t border-[var(--surface-border)] bg-[var(--surface)] flex flex-col">
-        <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--surface-border)] bg-[var(--bg-secondary)]">
+      {/* ─── Bottom Panel: Console / Tests / History ─── */}
+      <div className="border-t border-[#333333] bg-[#252526] flex flex-col h-44">
+        <div className="flex items-center justify-between px-3 border-b border-[#333333] bg-[#1f1f1f]">
           <div className="flex items-center gap-1">
             <button
-              type="button"
               onClick={() => setActiveBottomTab("console")}
-              style={{
-                fontSize: "0.75rem",
-                padding: "0.2rem 0.55rem",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                cursor: "pointer",
-                backgroundColor: activeBottomTab === "console" ? "var(--bg-tertiary)" : "transparent",
-                color: activeBottomTab === "console" ? "var(--text-primary)" : "var(--text-tertiary)",
-                fontWeight: activeBottomTab === "console" ? 600 : 400,
-              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors border-b-2 ${
+                activeBottomTab === "console"
+                  ? "border-[var(--color-primary)] text-white"
+                  : "border-transparent text-[#888888] hover:text-[#cccccc]"
+              }`}
             >
-              Console Output
+              <Terminal size={12} />
+              <span>Console Output</span>
             </button>
 
             <button
-              type="button"
               onClick={() => setActiveBottomTab("tests")}
-              style={{
-                fontSize: "0.75rem",
-                padding: "0.2rem 0.55rem",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                cursor: "pointer",
-                backgroundColor: activeBottomTab === "tests" ? "var(--bg-tertiary)" : "transparent",
-                color: activeBottomTab === "tests" ? "var(--text-primary)" : "var(--text-tertiary)",
-                fontWeight: activeBottomTab === "tests" ? 600 : 400,
-              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors border-b-2 ${
+                activeBottomTab === "tests"
+                  ? "border-[var(--color-primary)] text-white"
+                  : "border-transparent text-[#888888] hover:text-[#cccccc]"
+              }`}
             >
-              Sample Tests ({sampleTestCases.length})
+              <Layers size={12} />
+              <span>Test Cases</span>
+              {testResults.length > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    passedTestsCount === testResults.length ? "bg-emerald-900/60 text-emerald-300" : "bg-amber-900/60 text-amber-300"
+                  }`}
+                >
+                  {passedTestsCount}/{testResults.length}
+                </span>
+              )}
             </button>
 
             <button
-              type="button"
               onClick={() => setActiveBottomTab("history")}
-              style={{
-                fontSize: "0.75rem",
-                padding: "0.2rem 0.55rem",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                cursor: "pointer",
-                backgroundColor: activeBottomTab === "history" ? "var(--bg-tertiary)" : "transparent",
-                color: activeBottomTab === "history" ? "var(--text-primary)" : "var(--text-tertiary)",
-                fontWeight: activeBottomTab === "history" ? 600 : 400,
-              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors border-b-2 ${
+                activeBottomTab === "history"
+                  ? "border-[var(--color-primary)] text-white"
+                  : "border-transparent text-[#888888] hover:text-[#cccccc]"
+              }`}
             >
-              Run History ({runHistory.length})
+              <History size={12} />
+              <span>Run History</span>
             </button>
           </div>
 
           {executionTime !== null && (
-            <span className="text-[10px] text-[var(--text-tertiary)] font-mono">
-              Elapsed: {executionTime}ms
-            </span>
+            <div className="text-[11px] text-[#888888]">Execution: {executionTime}ms</div>
           )}
         </div>
 
-        {/* Tab 1: Console Output */}
-        {activeBottomTab === "console" && (
-          <div className="p-3 bg-[var(--bg-primary)] font-mono text-xs min-h-[90px] max-h-[160px] overflow-y-auto">
-            {output ? (
-              <pre
-                className={`whitespace-pre-wrap leading-relaxed ${
-                  hasError ? "text-[var(--color-error)]" : "text-[var(--text-secondary)]"
-                }`}
-              >
-                {output}
-              </pre>
-            ) : (
-              <span className="text-[var(--text-tertiary)] italic">
-                Click &apos;Run Tests&apos; to execute your solution against test cases.
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Tab 2: Sample Test Cases */}
-        {activeBottomTab === "tests" && (
-          <div className="p-3 bg-[var(--bg-primary)] text-xs flex flex-col gap-2 min-h-[90px] max-h-[160px] overflow-y-auto font-mono">
-            {sampleTestCases.map((tc, idx) => {
-              const res = testResults[idx];
-              return (
-                <div
-                  key={idx}
-                  className="p-2 rounded bg-[var(--bg-secondary)] border border-[var(--surface-border)] flex items-center justify-between"
+        {/* Tab Content */}
+        <div className="flex-1 p-3 overflow-y-auto font-mono text-xs">
+          {activeBottomTab === "console" && (
+            <div>
+              {output === null ? (
+                <div className="text-[#666666] italic">Click &quot;Run Samples&quot; to execute your solution in the isolated sandbox.</div>
+              ) : (
+                <pre
+                  className={`whitespace-pre-wrap ${
+                    hasError ? "text-[#f87171]" : "text-[#4ade80]"
+                  }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="text-[var(--text-tertiary)]">Case {idx + 1}:</span>
-                    <span>input: <code>{tc.input}</code></span>
-                    <span className="text-[var(--text-tertiary)]">→</span>
-                    <span>expected: <code>{tc.expectedOutput}</code></span>
+                  {output}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {activeBottomTab === "tests" && (
+            <div className="flex flex-col gap-2">
+              {testResults.length === 0 ? (
+                <div className="text-[#888888]">
+                  <p className="mb-2">Sample Test Cases configured for this problem:</p>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {publicTestCases.map((tc, idx) => (
+                      <div key={idx} className="bg-[#1e1e1e] p-2 rounded border border-[#333333] text-[11px]">
+                        <span className="text-[#888888]">Case {idx + 1}: </span>
+                        <code>input: {tc.input}</code> → <code>expected: {tc.expectedOutput}</code>
+                      </div>
+                    ))}
                   </div>
-
-                  {res && (
-                    <div className="flex items-center gap-2">
-                      {!res.passed && (
-                        <span className="text-[10px] text-[var(--color-error)]">
-                          got: <code>{res.actual}</code>
-                        </span>
-                      )}
-                      <span
-                        className={`badge text-[10px] ${
-                          res.passed ? "badge-success" : "badge-error"
-                        }`}
-                      >
-                        {res.passed ? "Passed" : "Failed"}
-                      </span>
-                    </div>
-                  )}
                 </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Tab 3: Run History (C4) */}
-        {activeBottomTab === "history" && (
-          <div className="p-3 bg-[var(--bg-primary)] text-xs flex flex-col gap-1.5 min-h-[90px] max-h-[160px] overflow-y-auto font-mono">
-            {runHistory.length === 0 ? (
-              <span className="text-[var(--text-tertiary)] italic">No execution runs recorded yet.</span>
-            ) : (
-              runHistory.map((run) => (
-                <div
-                  key={run.id}
-                  className="p-1.5 rounded bg-[var(--bg-secondary)] flex items-center justify-between text-[11px]"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      style={{
-                        color:
-                          run.status === "SUCCESS"
-                            ? "var(--color-success)"
-                            : "var(--color-error)",
-                        fontWeight: 600,
-                      }}
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {testResults.map((tr, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-2 rounded border flex items-center justify-between text-[11px] ${
+                        tr.passed
+                          ? "bg-emerald-950/20 border-emerald-800/40 text-emerald-300"
+                          : "bg-rose-950/20 border-rose-800/40 text-rose-300"
+                      }`}
                     >
-                      [{run.status}]
-                    </span>
-                    <span className="text-[var(--text-secondary)] truncate max-w-[260px]">{run.output}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-[var(--text-tertiary)]">
-                    <span>{run.durationMs}ms</span>
-                    <span>{run.timestamp}</span>
-                  </div>
+                      <div className="flex items-center gap-2">
+                        {tr.passed ? <Check size={14} className="text-emerald-400" /> : <X size={14} className="text-rose-400" />}
+                        <span>Case {idx + 1}</span>
+                        <code className="text-[#aaaaaa]">({tr.input})</code>
+                      </div>
+                      <div className="text-[10px]">
+                        Expected: <code>{tr.expected}</code> | Actual: <code>{tr.actual}</code>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
+
+          {activeBottomTab === "history" && (
+            <div>
+              {runHistory.length === 0 ? (
+                <div className="text-[#666666] italic">No local runs recorded yet in this session.</div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {runHistory.map((h) => (
+                    <div
+                      key={h.id}
+                      className="flex items-center justify-between p-1.5 rounded bg-[#1e1e1e] border border-[#333333] text-[11px]"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-[9px] px-1 py-0.5 rounded font-bold ${
+                            h.status === "SUCCESS"
+                              ? "bg-emerald-900/60 text-emerald-300"
+                              : "bg-rose-900/60 text-rose-300"
+                          }`}
+                        >
+                          {h.status}
+                        </span>
+                        <span className="text-[#888888]">{h.timestamp}</span>
+                        <span className="text-[#cccccc] truncate max-w-[200px]">{h.output}</span>
+                      </div>
+                      <span className="text-[#666666] text-[10px]">{h.durationMs}ms</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
