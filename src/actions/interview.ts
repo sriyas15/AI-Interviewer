@@ -650,14 +650,22 @@ export async function submitAnswerAndEvaluate(input: SubmitAnswerInput) {
 
       return {
         success: true,
-        evaluation: savedResponse.evaluation,
+        evaluation: {
+          ...savedResponse.evaluation,
+          shouldFollowUp: evaluationResult.shouldFollowUp,
+          followUpQuestion: evaluationResult.followUpQuestion,
+        },
         isCompleted: true,
       };
     }
 
     return {
       success: true,
-      evaluation: savedResponse.evaluation,
+      evaluation: {
+        ...savedResponse.evaluation,
+        shouldFollowUp: evaluationResult.shouldFollowUp,
+        followUpQuestion: evaluationResult.followUpQuestion,
+      },
       isCompleted: false,
     };
   } catch (error) {
