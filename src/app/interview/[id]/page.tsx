@@ -29,6 +29,8 @@ export default async function InterviewRoomPage({ params }: PageProps) {
       status: true,
       userId: true,
       durationMinutes: true,
+      extraTimeMinutes: true,
+      mode: true,
       startedAt: true,
     },
   });
@@ -40,6 +42,11 @@ export default async function InterviewRoomPage({ params }: PageProps) {
   // Security check: Only the candidate who owns this interview (or an admin) can access it
   if (interview.userId !== session.user.id && session.user.role !== "ADMIN") {
     redirect("/dashboard");
+  }
+
+  // If status is PENDING, send candidate through lobby / pre-flight check first
+  if (interview.status === "PENDING") {
+    redirect(`/interview/${id}/start`);
   }
 
   // If already completed, go directly to report
