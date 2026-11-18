@@ -6,6 +6,8 @@ import {
   EvaluationOutput,
   ReportOutput,
 } from "@/lib/validations";
+import { computeWeightedOverallScore } from "@/lib/scoring";
+import { logLLMTelemetry } from "@/lib/logger";
 import {
   QUESTION_GENERATION_SYSTEM_PROMPT,
   ANSWER_EVALUATION_SYSTEM_PROMPT,
@@ -76,6 +78,7 @@ async function callLLM(
 ): Promise<LLMCallResult | null> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
+  const startTime = Date.now();
 
   // 1. Try Gemini
   if (geminiKey) {
@@ -105,10 +108,21 @@ async function callLLM(
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text) {
-          const promptTokens = data?.usageMetadata?.promptTokenCount || 350;
-          const candidatesTokens = data?.usageMetadata?.candidatesTokenCount || 200;
+          const promptTokens = data?.usageMetadata?.promptTokenCount ?? 0;
+          const candidatesTokens = data?.usageMetadata?.candidatesTokenCount ?? 0;
           const totalTokens = data?.usageMetadata?.totalTokenCount || (promptTokens + candidatesTokens);
-          const cost = Number(((promptTokens * 0.075 + candidatesTokens * 0.3) / 1000000).toFixed(6));
+          const cost = (promptTokens || candidatesTokens)
+            ? Number(((promptTokens * 0.075 + candidatesTokens * 0.3) / 1000000).toFixed(6))
+            : 0;
+          logLLMTelemetry({
+            action: "callLLM_gemini",
+            model: "gemini-1.5-flash",
+            promptVersion: "v2.1",
+            durationMs: Date.now() - startTime,
+            tokens: { prompt: promptTokens, completion: candidatesTokens, total: totalTokens },
+            estimatedCost: cost,
+            success: true,
+          });
           return {
             text,
             modelName: "gemini-1.5-flash",
@@ -149,10 +163,21 @@ async function callLLM(
         const data = await res.json();
         const text = data?.choices?.[0]?.message?.content;
         if (text) {
-          const promptTokens = data?.usage?.prompt_tokens || 350;
-          const completionTokens = data?.usage?.completion_tokens || 200;
+          const promptTokens = data?.usage?.prompt_tokens ?? 0;
+          const completionTokens = data?.usage?.completion_tokens ?? 0;
           const totalTokens = data?.usage?.total_tokens || (promptTokens + completionTokens);
-          const cost = Number(((promptTokens * 0.15 + completionTokens * 0.6) / 1000000).toFixed(6));
+          const cost = (promptTokens || completionTokens)
+            ? Number(((promptTokens * 0.15 + completionTokens * 0.6) / 1000000).toFixed(6))
+            : 0;
+          logLLMTelemetry({
+            action: "callLLM_openai",
+            model: "gpt-4o-mini",
+            promptVersion: "v2.1",
+            durationMs: Date.now() - startTime,
+            tokens: { prompt: promptTokens, completion: completionTokens, total: totalTokens },
+            estimatedCost: cost,
+            success: true,
+          });
           return {
             text,
             modelName: "gpt-4o-mini",
@@ -213,9 +238,15 @@ Respond strictly with a JSON object matching this schema:
   "content": "The actual question text to ask the candidate",
   "type": "TECHNICAL" | "BEHAVIORAL" | "CODING" | "SYSTEM_DESIGN",
   "context": "Optional context, code snippet, or scenario description",
-  "expectedTopics": ["topic1", "topic2", "topic3"]
+  "expectedTopics": ["topic1", "topic2", "topic3"],
+  "hints": ["Progressive hint 1", "Progressive hint 2", "Progressive hint 3"],
+  "starterCode": "function signature / starter template",
+  "testCases": [
+    { "input": "[input args]", "expectedOutput": "expected return", "isHidden": false, "explanation": "sample case" },
+    { "input": "[input args]", "expectedOutput": "expected return", "isHidden": true, "explanation": "edge case" }
+  ]
 }
-`;
+Note: For CODING questions, you MUST provide at least 2 public testCases (isHidden: false), 2 hidden testCases (isHidden: true), starterCode, and 3 tailored hints.`;
 
   const llmResult = await callLLM(QUESTION_GENERATION_SYSTEM_PROMPT, userPrompt, 0.4);
 
@@ -421,22 +452,29 @@ Return a JSON object matching this schema:
     }
   }
 
-  // Fallback Report Synthesis with rubric formula (Item 6 & 7)
+  // Fallback Report Synthesis with rubric formula
   const techScore = Math.min(100, Math.max(50, averageScore + 2));
   const commScore = Math.min(100, Math.max(50, averageScore - 1));
   const psScore = Math.min(100, Math.max(50, averageScore + 1));
-  const codeScore = 80;
 
-  let finalOverall = averageScore;
-  const weights = interview.rubricWeights as Record<string, number> | undefined;
-  if (weights && typeof weights === "object") {
-    const wTech = (weights.technical ?? 40) / 100;
-    const wPS = (weights.problemSolving ?? 30) / 100;
-    const wComm = (weights.communication ?? 20) / 100;
-    const wCode = (weights.codeQuality ?? 10) / 100;
-    const denom = (wTech + wPS + wComm + wCode) || 1;
-    finalOverall = Math.round((techScore * wTech + psScore * wPS + commScore * wComm + codeScore * wCode) / denom);
-  }
+  const hasCoding = questionsWithResponses.some((q) => q.type === "CODING");
+  const codeScores = questionsWithResponses
+    .filter((q) => q.type === "CODING" && q.response?.evaluation?.score !== undefined && q.response?.evaluation?.score !== null)
+    .map((q) => Math.round(q.response!.evaluation!.score * 10));
+
+  const codeQualityScore = hasCoding && codeScores.length > 0
+    ? Math.round(codeScores.reduce((a, b) => a + b, 0) / codeScores.length)
+    : null;
+
+  const finalOverall = computeWeightedOverallScore(
+    {
+      technical: techScore,
+      problemSolving: psScore,
+      communication: commScore,
+      codeQuality: codeQualityScore,
+    },
+    interview.rubricWeights as any
+  );
 
   return {
     overallScore: finalOverall,
@@ -444,7 +482,7 @@ Return a JSON object matching this schema:
     technicalScore: techScore,
     communicationScore: commScore,
     problemSolvingScore: psScore,
-    codeQualityScore: codeScore,
+    codeQualityScore,
     modelName: "heuristic-fallback",
     promptVersion: "v1.0-heuristic",
     tokenCount: 0,
@@ -491,6 +529,18 @@ function getFallbackQuestion(params: GenerateQuestionParams): QuestionGeneration
       type: "CODING",
       context: `Example:\nInput: [[1,3],[2,6],[8,10],[15,18]]\nOutput: [[1,6],[8,10],[15,18]]\nAnalyze your solution's time and space complexity.`,
       expectedTopics: ["Sorting", "Interval Merging", "O(N log N) Time Complexity", "Edge Cases"],
+      hints: [
+        "First, sort the intervals by their start time: intervals.sort((a, b) => a[0] - b[0]).",
+        "Iterate through the intervals and check if the current interval starts before or at the previous interval's end time.",
+        "If they overlap, merge them by setting previous[1] = Math.max(previous[1], current[1]). If not, push the current interval as a new range.",
+      ],
+      starterCode: `function mergeIntervals(intervals) {\n  // Write your interval merge solution here\n  return intervals;\n}`,
+      testCases: [
+        { input: "[[1,3],[2,6],[8,10],[15,18]]", expectedOutput: [[1,6],[8,10],[15,18]], isHidden: false, explanation: "Standard overlap merge" },
+        { input: "[[1,4],[4,5]]", expectedOutput: [[1,5]], isHidden: false, explanation: "Consecutive boundary overlap" },
+        { input: "[[1,4],[0,4]]", expectedOutput: [[0,4]], isHidden: true, explanation: "Enclosing interval" },
+        { input: "[[1,4],[2,3]]", expectedOutput: [[1,4]], isHidden: true, explanation: "Internal subset" },
+      ],
     };
   }
 
