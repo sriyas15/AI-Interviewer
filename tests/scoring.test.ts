@@ -1,32 +1,12 @@
 import assert from "node:assert/strict";
-
-/**
- * Formula test suite: Hint penalty and weighted rubric scoring
- */
-
-export function calculateHintPenalty(rawScore: number, hintsUsed: number): { penaltyAmount: number; finalScore: number } {
-  const numHints = Math.max(0, Math.min(3, hintsUsed));
-  const penaltyFraction = numHints === 1 ? 0.05 : numHints === 2 ? 0.10 : numHints >= 3 ? 0.15 : 0;
-  const penaltyAmount = Number((rawScore * penaltyFraction).toFixed(2));
-  const finalScore = Math.max(0, Number((rawScore - penaltyAmount).toFixed(1)));
-  return { penaltyAmount, finalScore };
-}
-
-export function computeWeightedOverallScore(
-  scores: { technical: number; problemSolving: number; communication: number; codeQuality?: number },
-  weights: { technical: number; problemSolving: number; communication: number; codeQuality: number }
-): number {
-  const wTech = weights.technical / 100;
-  const wPS = weights.problemSolving / 100;
-  const wComm = weights.communication / 100;
-  const wCode = weights.codeQuality / 100;
-  const denom = (wTech + wPS + wComm + wCode) || 1;
-  const code = scores.codeQuality ?? scores.technical;
-  return Math.round((scores.technical * wTech + scores.problemSolving * wPS + scores.communication * wComm + code * wCode) / denom);
-}
+import {
+  calculateHintPenalty,
+  computeWeightedOverallScore,
+  computeCodeCorrectnessScore,
+} from "../src/lib/scoring";
 
 export async function runScoringTests() {
-  console.log("▶ Running Scoring Formula Tests...");
+  console.log("▶ Running Real Scoring Formula Tests (from src/lib/scoring)...");
 
   // 1. Hint Penalty Tests
   {
@@ -46,7 +26,7 @@ export async function runScoringTests() {
     assert.equal(threeHints.penaltyAmount, 1.5);
     assert.equal(threeHints.finalScore, 8.5, "3 hints should apply 15% penalty (1.5 pts)");
 
-    // Bound test: more than 3 hints should cap penalty at 15%
+    // Bound test: >3 hints capped at 15%
     const fourHints = calculateHintPenalty(10.0, 5);
     assert.equal(fourHints.penaltyAmount, 1.5, "Exceeding 3 hints should cap penalty at 15%");
     assert.equal(fourHints.finalScore, 8.5);
@@ -65,13 +45,29 @@ export async function runScoringTests() {
     const overall = computeWeightedOverallScore(scores, defaultWeights);
     assert.equal(overall, 82, "Rubric weighted overall score should match formula");
 
-    // Heavy coding weight rubric
+    // Custom weights
     const codingWeights = { technical: 20, problemSolving: 20, communication: 10, codeQuality: 50 };
     // Expected: 80*0.2 + 90*0.2 + 70*0.1 + 85*0.5 = 16 + 18 + 7 + 42.5 = 83.5 -> Math.round = 84
     const codingOverall = computeWeightedOverallScore(scores, codingWeights);
     assert.equal(codingOverall, 84, "Custom template rubric weights must be accurately applied");
+
+    // Null code quality fallback
+    const nullCodeScore = computeWeightedOverallScore(
+      { technical: 80, problemSolving: 90, communication: 70, codeQuality: null },
+      defaultWeights
+    );
+    assert.equal(nullCodeScore, 81, "Null code quality should fall back cleanly");
+  }
+
+  // 3. Code Correctness Score Tests
+  {
+    assert.equal(computeCodeCorrectnessScore(null, null), null);
+    assert.equal(computeCodeCorrectnessScore(undefined, 5), null);
+    assert.equal(computeCodeCorrectnessScore(0, 0), null);
+    assert.equal(computeCodeCorrectnessScore(5, 5), 10.0);
+    assert.equal(computeCodeCorrectnessScore(3, 4), 7.5);
+    assert.equal(computeCodeCorrectnessScore(0, 5), 0.0);
   }
 
   console.log("  ✔ All Scoring Formula Tests Passed!");
 }
-
