@@ -418,7 +418,7 @@ Return a JSON object matching this schema:
         const cScore = Math.max(0, Math.min(100, Math.round(validated.data.communicationScore)));
         const pScore = Math.max(0, Math.min(100, Math.round(validated.data.problemSolvingScore)));
         const qScore =
-          validated.data.codeQualityScore !== undefined
+          validated.data.codeQualityScore !== undefined && validated.data.codeQualityScore !== null
             ? Math.max(0, Math.min(100, Math.round(validated.data.codeQualityScore)))
             : undefined;
 
