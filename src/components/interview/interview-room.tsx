@@ -60,15 +60,6 @@ interface InterviewRoomProps {
     startedAt?: string | Date | null;
   };
 }
-    title: string;
-    jobRole: string;
-    difficulty: "EASY" | "MEDIUM" | "HARD";
-    topics: string[];
-    status: string;
-    durationMinutes?: number;
-    startedAt?: string | Date | null;
-  };
-}
 
 export function InterviewRoom({ interview }: InterviewRoomProps) {
   const router = useRouter();
@@ -338,13 +329,14 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
       }
 
       // Check if AI generated a follow-up and we haven't reached the 2-follow-up cap (C2)
+      const evaluationData = result.evaluation as any;
       if (
-        result.evaluation?.shouldFollowUp &&
+        evaluationData?.shouldFollowUp &&
         followUpCount < 2 &&
-        result.evaluation.followUpQuestion
+        evaluationData.followUpQuestion
       ) {
         setFollowUpCount((prev) => prev + 1);
-        setActiveFollowUpPrompt(result.evaluation.followUpQuestion);
+        setActiveFollowUpPrompt(evaluationData.followUpQuestion);
         setAnswerText("");
         setAiStatus("speaking");
         setIsSubmitting(false);
