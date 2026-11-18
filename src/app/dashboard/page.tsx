@@ -192,10 +192,15 @@ export default async function DashboardPage(props: DashboardPageProps) {
                 : "Track your practice sessions and keep improving your interview skills."}
             </p>
           </div>
-          {isAdmin && (
+          {isAdmin ? (
             <Link href="/interview/new" className="btn btn-primary">
               <Plus size={18} />
               <span>New Interview</span>
+            </Link>
+          ) : (
+            <Link href="/practice" className="btn btn-secondary">
+              <BrainCircuit size={18} className="text-[var(--color-primary)]" />
+              <span>Practice Mode</span>
             </Link>
           )}
         </div>
@@ -313,10 +318,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
                         </Link>
                       ) : isStarted && inv.interviewId ? (
                         <Link
-                          href={`/interview/${inv.interviewId}`}
+                          href={inv.interview?.status === "PENDING" ? `/interview/${inv.interviewId}/start` : `/interview/${inv.interviewId}`}
                           className="btn btn-primary btn-sm text-xs py-1.5 px-3 flex items-center gap-1.5"
                         >
-                          <span>Resume Interview</span>
+                          <span>{inv.interview?.status === "PENDING" ? "Enter Lobby" : "Resume Interview"}</span>
                           <ArrowRight size={13} />
                         </Link>
                       ) : !isExpired ? (
