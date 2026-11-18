@@ -65,6 +65,18 @@ enum CandidateDecision {
   REJECT
 }
 
+enum InterviewMode {
+  PRACTICE
+  ASSESSMENT
+}
+
+enum ReportStatus {
+  PENDING
+  GENERATING
+  READY
+  FAILED
+}
+
 // ─────────────────────────────────────────────────────────────
 // MODELS
 // ─────────────────────────────────────────────────────────────
@@ -232,6 +244,10 @@ model Interview {
 
   // Recruiter settings & assessment duration
   durationMinutes  Int               @default(30)
+  extraTimeMinutes Int               @default(0)
+  mode             InterviewMode     @default(ASSESSMENT)
+  reportStatus     ReportStatus      @default(PENDING)
+  transcript       Json?             // Conversational transcript (STT/audio turns)
   feedbackReleased Boolean           @default(false)
   hintsUsed        Int               @default(0)
 
@@ -392,6 +408,7 @@ model Report {
   weaknesses          String[] // Overall weaknesses
   recommendations     String[] // Actionable improvement suggestions
   detailedFeedback    Json     // Full structured feedback from LLM
+  pdfUrl              String?  // Generated PDF report download URL
 
   createdAt           DateTime @default(now())
 
