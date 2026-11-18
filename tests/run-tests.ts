@@ -3,6 +3,7 @@ import { runFollowUpTests } from "./follow-up.test";
 import { runInvitationClaimTests } from "./invitation-claim.test";
 import { runCodeExecutionTests } from "./code-execution.test";
 import { runCodeRunnerTests } from "./code-runner.test";
+import { runIntegrationPipelineTests } from "./integration-pipeline.test";
 
 async function main() {
   console.log("=========================================");
@@ -20,6 +21,8 @@ async function main() {
     await runCodeExecutionTests();
     console.log();
     await runCodeRunnerTests();
+    console.log();
+    await runIntegrationPipelineTests();
     console.log();
 
     const elapsed = Date.now() - start;

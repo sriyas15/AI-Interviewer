@@ -35,7 +35,10 @@ An enterprise-grade, autonomous technical interview platform powered by Next.js,
 - **Strict Role Gating**: Candidates are restricted from creating ad-hoc interviews; `/interview/new` and creation actions are gated exclusively to `ADMIN` users.
 - **Account Deactivation Enforcement**: Immediate session termination and route blocking in middleware for deactivated accounts (`isActive: false`).
 - **GDPR Data Deletion Compliance**: Self-serve data erasure requests submitted by candidates from settings.
-- **Sliding-Window Rate Limiting**: In-memory protection against brute-force attacks on auth and public endpoints.
+- **Distributed Redis Rate Limiting**: Atomic sliding-window rate limiting backed by Redis `multi().incr().ttl()` (with in-memory fallback) across scaled instances.
+- **Asynchronous BullMQ Worker**: Dedicated background worker (`src/worker.ts`) decoupled from Next.js web handlers to process LLM feedback generation, code grading, and score computation asynchronously via Redis.
+- **Isolated Code Sandboxing**: Remote multi-language code execution via Judge0 (`judge0/judge0:v1.13.0`) with isolated sandboxing and function-call stdout wrappers for Python, JavaScript, TypeScript, Java, and C++.
+- **Binary PDF Reports**: Print-ready candidate assessment summaries generated via headless Playwright (`page.pdf()`).
 - **Platform Healthcheck**: `/api/health` monitoring database connectivity and memory usage.
 
 ---
@@ -45,6 +48,9 @@ An enterprise-grade, autonomous technical interview platform powered by Next.js,
 - **Framework**: [Next.js 16 (App Router)](https://nextjs.org/) + [React 19](https://react.dev/)
 - **Database**: [PostgreSQL](https://www.postgresql.org/)
 - **ORM**: [Prisma 6.19](https://www.prisma.io/)
+- **Cache & Queue**: [Redis](https://redis.io/) + [BullMQ](https://bullmq.io/)
+- **Code Execution Sandbox**: [Judge0 CE](https://judge0.com/)
+- **PDF Generation**: [Playwright](https://playwright.dev/) Chromium headless engine
 - **Authentication**: [NextAuth v5 (Auth.js)](https://authjs.dev/) with Credentials & Google OAuth
 - **Styling**: Tailwind CSS & Glassmorphism Design Tokens
 - **Icons**: [Lucide React](https://lucide.dev/)
@@ -66,17 +72,18 @@ ai-interviewer/
 │   ├── app/
 │   │   ├── (auth)/              # Authentication pages (login, register, forgot-password)
 │   │   ├── admin/               # Recruiter portal & session deep dive
-│   │   ├── api/                 # API routes (health, auth, webhooks)
+│   │   ├── api/                 # API routes (health, auth, webhooks, PDF generation)
 │   │   ├── dashboard/           # Candidate dashboard & invitation list
 │   │   ├── interview/           # Lobby, active interview room, and report pages
 │   │   ├── invite/[token]/      # Expiring assessment invitation landing page
 │   │   └── settings/            # User settings & GDPR data deletion requests
 │   ├── components/              # UI components (avatar, code editor, proctoring guard, admin portal)
-│   ├── lib/                     # Database client, AI service, email dispatcher, rate limiter
-│   └── types/                   # Type definitions and NextAuth extensions
-├── tests/                       # Unit test suites (scoring, follow-up state machine, invite claim)
+│   ├── lib/                     # Database client, AI service, email dispatcher, rate limiter, judge0, queue
+│   ├── types/                   # Type definitions and NextAuth extensions
+│   └── worker.ts                # BullMQ background worker entrypoint
+├── tests/                       # Unit & integration test suites
 ├── Dockerfile                   # Multi-stage production container
-├── docker-compose.yml           # Complete web + PostgreSQL stack
+├── docker-compose.yml           # Complete web, worker, postgres, redis & judge0 stack
 └── package.json
 ```
 
@@ -87,6 +94,7 @@ ai-interviewer/
 ### Prerequisites
 - **Node.js** >= 20.x (Node 22 recommended)
 - **PostgreSQL** >= 14.x (or Docker)
+- **Redis** >= 6.x (or Docker)
 - **npm** or **pnpm**
 
 ### 1. Clone & Install Dependencies
@@ -107,6 +115,13 @@ Configure your credentials:
 DATABASE_URL="postgresql://postgres:password@localhost:5432/ai_interviewer"
 AUTH_SECRET="your-32-character-random-secret-here"
 AUTH_URL="http://localhost:3000"
+
+# Redis & Job Queue
+REDIS_URL="redis://localhost:6379"
+
+# Remote Code Execution (Judge0)
+JUDGE0_URL="http://localhost:2358"
+JUDGE0_API_KEY=""
 
 # AI Inference Keys (Optional — falls back to heuristic engine if blank)
 GEMINI_API_KEY=""
@@ -130,17 +145,25 @@ Default seeded credentials:
 - **Admin**: `admin@interviewer.ai` / `AdminPass123!`
 - **Candidate**: `candidate@example.com` / `CandidatePass123!`
 
-### 4. Running the Development Server
+### 4. Running the Development Server & Worker
+
+Run the web application:
 ```bash
 npm run dev
 ```
+
+In a separate terminal, start the asynchronous BullMQ report processing worker:
+```bash
+npm run worker
+```
+
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
 ## 🧪 Testing
 
-Run the automated test suite covering hint penalties, rubric formulas, follow-up state transitions, and invitation claim rules:
+Run the automated test suite covering hint penalties, rubric formulas, follow-up state transitions, invitation claims, and pipeline integration:
 
 ```bash
 npm test
@@ -150,15 +173,20 @@ npm test
 
 ## 🐳 Docker Deployment
 
-To spin up the entire application along with PostgreSQL using Docker Compose:
+To spin up the entire production stack (Next.js web app, BullMQ background worker, PostgreSQL, Redis, and Judge0 code runner):
 
 ```bash
 docker compose up -d --build
 ```
 
-The application will be accessible at [http://localhost:3000](http://localhost:3000) and the PostgreSQL database on port `5432`.
+### Services Started:
+- **web**: Next.js App Router on [http://localhost:3000](http://localhost:3000)
+- **worker**: BullMQ background evaluation worker processing `interview-jobs`
+- **db**: PostgreSQL database on port `5432`
+- **redis**: Redis cache & queue on port `6379`
+- **judge0**: Judge0 CE sandboxed code execution API on port `2358`
 
-To stop the containers:
+To stop all containers:
 ```bash
 docker compose down
 ```
