@@ -80,6 +80,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (
           invitation.status === "EXPIRED" ||
           invitation.status === "REVOKED" ||
+          invitation.status === "COMPLETED" ||
           new Date() > invitation.expiresAt
         ) {
           return null;
@@ -89,6 +90,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         let user = await db.user.findUnique({
           where: { email: normalizedEmail },
         });
+
+        // Security check: Never permit magic invite-token login for non-candidate (admin) accounts
+        if (user && user.role !== "CANDIDATE") {
+          return null;
+        }
 
         if (!user) {
           user = await db.user.create({
