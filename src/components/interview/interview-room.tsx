@@ -99,6 +99,17 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   // Autosave Draft Notification (C3)
   const [draftRestored, setDraftRestored] = useState<boolean>(false);
 
+  // Keyboard accessibility: ESC closes modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && showHintConfirm) {
+        setShowHintConfirm(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showHintConfirm]);
+
   // Question Stopwatch & Stage Time Limit (C2)
   const [secondsElapsed, setSecondsElapsed] = useState<number>(0);
   const STAGE_TIME_LIMIT_SECS = 360; // 6 mins per stage
@@ -716,6 +727,12 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
 
                   <div className="relative">
                     <textarea
+                      id="candidate-response-input"
+                      aria-label={
+                        currentQuestion.type === "CODING"
+                          ? "Explanation and tradeoffs"
+                          : "Candidate response answer"
+                      }
                       value={answerText}
                       onChange={(e) => setAnswerText(e.target.value)}
                       rows={5}
@@ -773,6 +790,10 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
       {/* ─── MODAL: Hint Confirmation (C5) ─── */}
       {showHintConfirm && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="hint-modal-title"
+          aria-describedby="hint-modal-desc"
           style={{
             position: "fixed",
             inset: 0,
@@ -791,9 +812,9 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
           >
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem", color: "var(--color-warning)" }}>
               <AlertTriangle size={20} />
-              <h3 style={{ fontSize: "1rem", fontWeight: 700 }}>Request Hint Level {hintsUsed + 1}?</h3>
+              <h3 id="hint-modal-title" style={{ fontSize: "1rem", fontWeight: 700 }}>Request Hint Level {hintsUsed + 1}?</h3>
             </div>
-            <p style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            <p id="hint-modal-desc" style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
               Requesting Hint {hintsUsed + 1} will reveal structured guidance, but will deduct{" "}
               <strong style={{ color: "var(--color-warning)" }}>{(hintsUsed + 1) * 5}%</strong> from this question&apos;s score.
             </p>

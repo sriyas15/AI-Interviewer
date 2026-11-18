@@ -209,30 +209,55 @@ export function CodeEditor({
             }
           };
 
-          function deepEqual(actual, expected) {
-            if (actual === expected) return true;
-            if (actual === undefined && (expected === "undefined" || expected === undefined)) return true;
-            if (actual === null && (expected === "null" || expected === null)) return true;
+          function strictEqual(a, b) {
+            if (a === b) return true;
+            if (typeof a !== typeof b) return false;
+            if (a === null || b === null || a === undefined || b === undefined) return a === b;
+            if (typeof a === "number") {
+              if (isNaN(a) && isNaN(b)) return true;
+              return a === b;
+            }
+            if (typeof a !== "object") return a === b;
 
-            var actualStr = actual === undefined ? "undefined" : (typeof actual === "object" ? JSON.stringify(actual) : String(actual));
-            var normActual = actualStr.trim().replace(/\\s+/g, '');
-            var normExpected = String(expected).trim().replace(/\\s+/g, '');
-
-            if (normActual === normExpected) return true;
-            if ((actual === true || actual === false) && normActual.toLowerCase() === normExpected.toLowerCase()) return true;
-
-            var numActual = Number(actual);
-            var numExpected = Number(expected);
-            if (!isNaN(numActual) && !isNaN(numExpected) && Math.abs(numActual - numExpected) < 1e-6) {
+            var aIsArr = Array.isArray(a);
+            var bIsArr = Array.isArray(b);
+            if (aIsArr !== bIsArr) return false;
+            if (aIsArr && bIsArr) {
+              if (a.length !== b.length) return false;
+              for (var i = 0; i < a.length; i++) {
+                if (!strictEqual(a[i], b[i])) return false;
+              }
               return true;
             }
 
-            try {
-              var pActual = typeof actual === 'object' ? actual : JSON.parse(normActual);
-              var pExpected = JSON.parse(normExpected);
-              return JSON.stringify(pActual) === JSON.stringify(pExpected);
-            } catch(e) {}
-            return false;
+            var aKeys = Object.keys(a).sort();
+            var bKeys = Object.keys(b).sort();
+            if (aKeys.length !== bKeys.length) return false;
+            for (var k = 0; k < aKeys.length; k++) {
+              if (aKeys[k] !== bKeys[k]) return false;
+              if (!strictEqual(a[aKeys[k]], b[bKeys[k]])) return false;
+            }
+            return true;
+          }
+
+          function deepEqual(actual, expected) {
+            var parsedExpected = expected;
+            if (typeof expected === "string") {
+              var trm = expected.trim();
+              if (
+                (trm.startsWith("[") && trm.endsWith("]")) ||
+                (trm.startsWith("{") && trm.endsWith("}")) ||
+                trm === "true" || trm === "false" || trm === "null" ||
+                (!isNaN(Number(trm)) && trm !== "")
+              ) {
+                try {
+                  parsedExpected = JSON.parse(trm);
+                } catch(e) {
+                  parsedExpected = expected;
+                }
+              }
+            }
+            return strictEqual(actual, parsedExpected);
           }
 
           try {
@@ -441,6 +466,7 @@ export function CodeEditor({
             onClick={handleResetStarter}
             className="flex items-center gap-1 text-[#888888] hover:text-[#cccccc] transition-colors px-2 py-1 rounded hover:bg-[#333333]"
             title="Reset code to starter template"
+            aria-label="Reset code to starter template"
           >
             <RotateCcw size={12} />
             <span>Reset</span>
@@ -451,6 +477,7 @@ export function CodeEditor({
             disabled={isRunning}
             className="btn btn-primary btn-sm text-xs py-1 px-3 flex items-center gap-1.5"
             title="Execute code in client Web Worker against public sample test cases"
+            aria-label="Execute code in Web Worker"
           >
             {isRunning ? (
               <>
@@ -569,7 +596,11 @@ export function CodeEditor({
 
           {activeBottomTab === "tests" && (
             <div className="flex flex-col gap-2">
-              {testResults.length === 0 ? (
+              {publicTestCases.length === 0 ? (
+                <div className="bg-[#1e1e1e] p-4 rounded border border-[#333333] text-center text-[#888888] italic text-xs">
+                  No automated unit tests configured for this question. Your code and solution architecture will be evaluated by the interviewer.
+                </div>
+              ) : testResults.length === 0 ? (
                 <div className="text-[#888888]">
                   <p className="mb-2">Sample Test Cases configured for this problem:</p>
                   <div className="grid grid-cols-1 gap-1.5">
