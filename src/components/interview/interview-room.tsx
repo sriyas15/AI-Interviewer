@@ -17,6 +17,9 @@ import {
   Lightbulb,
   AlertTriangle,
   RotateCcw,
+  Eye,
+  Subtitles,
+  Volume2,
 } from "lucide-react";
 import { AIAvatar, AIStatus } from "./ai-avatar";
 import { CodeEditor } from "./code-editor";
@@ -26,6 +29,7 @@ import {
   getOrGenerateNextQuestion,
   submitAnswerAndEvaluate,
   logActivityEvent,
+  requestHintAction,
 } from "@/actions/interview";
 
 interface QuestionData {
@@ -36,6 +40,8 @@ interface QuestionData {
   context: string | null;
   expectedTopics: string[];
   hints?: string[];
+  hintsCount?: number;
+  hintsRevealed?: number;
   testCases?: any;
   starterCode?: any;
 }
@@ -43,6 +49,17 @@ interface QuestionData {
 interface InterviewRoomProps {
   interview: {
     id: string;
+    title: string;
+    jobRole: string;
+    difficulty: "EASY" | "MEDIUM" | "HARD";
+    topics: string[];
+    status: string;
+    mode?: "PRACTICE" | "ASSESSMENT";
+    durationMinutes?: number;
+    extraTimeMinutes?: number;
+    startedAt?: string | Date | null;
+  };
+}
     title: string;
     jobRole: string;
     difficulty: "EASY" | "MEDIUM" | "HARD";
@@ -83,6 +100,10 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   const [revealedHints, setRevealedHints] = useState<string[]>([]);
   const [showHintConfirm, setShowHintConfirm] = useState<boolean>(false);
 
+  // Accessibility States
+  const [highContrast, setHighContrast] = useState<boolean>(false);
+  const [liveCaptions, setLiveCaptions] = useState<string>("");
+
   // Autosave Draft Notification (C3)
   const [draftRestored, setDraftRestored] = useState<boolean>(false);
 
@@ -91,8 +112,8 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   const STAGE_TIME_LIMIT_SECS = 360; // 6 mins per stage
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Overall Assessment Countdown Timer
-  const totalAssessmentDurationSecs = (interview.durationMinutes || 30) * 60;
+  // Overall Assessment Countdown Timer (factoring in accommodation extra time)
+  const totalAssessmentDurationSecs = ((interview.durationMinutes || 30) + (interview.extraTimeMinutes || 0)) * 60;
   const [assessmentTimeRemaining, setAssessmentTimeRemaining] = useState<number>(() => {
     if (interview.startedAt) {
       const elapsedSecs = Math.floor((Date.now() - new Date(interview.startedAt).getTime()) / 1000);
@@ -152,6 +173,13 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
         setCurrentQuestion(res.question as QuestionData);
         setTotalQuestions(res.totalQuestions || 5);
         setAiStatus("speaking");
+        setLiveCaptions(res.question.content);
+
+        const serverHintsRevealed = (res.question as any).hintsRevealed || 0;
+        setHintsUsed(serverHintsRevealed);
+        if (res.question.hints && res.question.hints.length > 0) {
+          setRevealedHints(res.question.hints);
+        }
 
         let hasDraftCode = false;
         // Restore autosaved draft if exists (C3)
@@ -348,34 +376,29 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
     }
   };
 
-  // Capped Hints Request Handler using per-question bank hints & logged penalty
-  const handleUnlockHint = () => {
-    if (hintsUsed >= 3 || !currentQuestion) return;
+  // Server-Authoritative Hint Request Handler
+  const handleUnlockHint = async () => {
+    if (!currentQuestion) return;
 
-    const nextLevel = hintsUsed + 1;
-    const qHints = currentQuestion.hints || [];
-    let newHintText = "";
+    try {
+      const res = await requestHintAction({
+        interviewId: interview.id,
+        questionId: currentQuestion.id,
+      });
 
-    if (nextLevel <= qHints.length && qHints[nextLevel - 1]) {
-      newHintText = `[Hint ${nextLevel}] ${qHints[nextLevel - 1]}`;
-    } else if (nextLevel === 1) {
-      newHintText = `[Hint 1: Direction] Clarify constraints and formulate initial edge-case bounds for ${interview.jobRole}.`;
-    } else if (nextLevel === 2) {
-      newHintText = `[Hint 2: Strategy] Analyze space/time algorithmic trade-offs. Consider whether pre-computation, memoization, or pointer manipulation applies.`;
-    } else {
-      newHintText = `[Hint 3: Scaffold] Structure your modular functions, validate edge inputs, and draft clear invariants before submitting.`;
+      if (res.success && res.hint) {
+        const nextLevel = res.hintsRevealed || (hintsUsed + 1);
+        setHintsUsed(nextLevel);
+        setRevealedHints((prev) => [...prev, `[Hint ${nextLevel}] ${res.hint}`]);
+        setShowHintConfirm(false);
+      } else if (res.error) {
+        setError(res.error);
+        setShowHintConfirm(false);
+      }
+    } catch {
+      setError("Failed to request hint from server.");
+      setShowHintConfirm(false);
     }
-
-    setHintsUsed(nextLevel);
-    setRevealedHints((prev) => [...prev, newHintText]);
-    setShowHintConfirm(false);
-
-    // Log hint penalty activity event
-    logActivityEvent({
-      interviewId: interview.id,
-      type: "HINT_REQUESTED",
-      description: `Candidate requested Hint Level ${nextLevel} (-${nextLevel * 5}% scoring penalty applied).`,
-    });
   };
 
   const formatTimer = (totalSeconds: number) => {
@@ -402,7 +425,7 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
   const isAssessmentTimeLow = assessmentTimeRemaining <= 300; // Under 5 minutes left
 
   return (
-    <div className="flex-1 flex flex-col min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className={`flex-1 flex flex-col min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)] ${highContrast ? "contrast-125 saturate-150 font-medium" : ""}`}>
       {/* Top Session Action Bar */}
       <header className="border-b border-[var(--surface-border)] bg-[var(--surface)] px-6 py-3 flex items-center justify-between z-20">
         <div className="flex items-center gap-3">
@@ -441,8 +464,24 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
             <span>Q: {formatTimer(secondsElapsed)}</span>
           </div>
 
+          {/* High Contrast Accessibility Toggle */}
+          <button
+            type="button"
+            onClick={() => setHighContrast((prev) => !prev)}
+            className={`btn btn-ghost btn-sm text-xs py-1 px-2.5 flex items-center gap-1.5 border ${
+              highContrast
+                ? "border-[var(--color-primary)] text-[var(--color-primary)] bg-[var(--color-primary)]/10 font-bold"
+                : "border-[var(--surface-border)] text-[var(--text-secondary)]"
+            }`}
+            aria-pressed={highContrast}
+            title="Toggle high-contrast accessibility mode"
+          >
+            <Eye size={13} />
+            <span>{highContrast ? "Contrast: On" : "Contrast"}</span>
+          </button>
+
           {/* Anti-cheat proctoring guard with fullscreen & throttling (C6 / Policy) */}
-          <ProctoringGuard interviewId={interview.id} policy={proctoringPolicy} />
+          <ProctoringGuard interviewId={interview.id} policy={interview.mode === "PRACTICE" ? null : proctoringPolicy} />
         </div>
       </header>
 
@@ -456,6 +495,20 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
               speechText={activeFollowUpPrompt || currentQuestion?.content}
               autoSpeak={true}
             />
+          </div>
+
+          {/* Accessible Live Speech Captions */}
+          <div
+            role="region"
+            aria-live="polite"
+            aria-label="AI Speech Captions"
+            className="p-3 bg-[var(--bg-tertiary)] border border-[var(--surface-border)] rounded-xl text-xs text-[var(--text-secondary)] flex items-start gap-2 shadow-sm"
+          >
+            <Subtitles size={15} className="text-[var(--color-primary)] shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <span className="font-semibold text-[var(--text-primary)] block text-[11px] mb-0.5">Live Captions</span>
+              <p className="leading-relaxed italic">{liveCaptions || activeFollowUpPrompt || currentQuestion?.content || "AI interviewer is speaking..."}</p>
+            </div>
           </div>
 
           {/* Progress Card */}
@@ -624,6 +677,8 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
                       onLanguageChange={setCodeLanguage}
                       sampleTestCases={currentQuestion.testCases || undefined}
                       onTestResultsChange={(s) => setTestCaseSummary({ passed: s.passed, total: s.total })}
+                      isAssessment={interview.mode !== "PRACTICE"}
+                      blockPaste={proctoringPolicy?.blockPaste ?? (interview.mode !== "PRACTICE")}
                     />
                   </div>
                 )}
