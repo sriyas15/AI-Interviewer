@@ -15,7 +15,7 @@ export async function GET(
     const { id } = await params;
     const buffer = await generateReportPdfBuffer(id);
 
-    return new Response(buffer, {
+    return new Response(new Uint8Array(buffer), {
       status: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
