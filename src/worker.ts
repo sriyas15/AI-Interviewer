@@ -90,3 +90,4 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 logger.info({ event: "worker_ready", queue: "interview-jobs" });
+
