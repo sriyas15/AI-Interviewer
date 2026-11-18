@@ -294,6 +294,7 @@ model Question {
   context        String?      @db.Text
   expectedTopics String[]
   hints          String[]     @default([])
+  hintsRevealed  Int          @default(0)
   starterCode    Json?        // e.g. { javascript: "..." }
   testCases      Json?        // e.g. [{ input, expectedOutput, isHidden, explanation }]
 
