@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     }
 
     const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
-    const limiter = rateLimit(`livekit:${session.user.id}:${ip}`, { limit: 20, windowMs: 60000 });
+    const limiter = await rateLimit(`livekit:${session.user.id}:${ip}`, { limit: 20, windowMs: 60000 });
     if (!limiter.success) {
       return NextResponse.json({ error: "Rate limit exceeded. Please wait a moment." }, { status: 429 });
     }
