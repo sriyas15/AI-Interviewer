@@ -18,6 +18,7 @@ import {
   Calendar,
   Sparkles,
   Printer,
+  Download,
 } from "lucide-react";
 import { ProfileDropdown } from "@/components/auth/profile-dropdown";
 import { RecruiterDecisionCard } from "@/components/admin/recruiter-decision-card";
@@ -127,6 +128,16 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
           </div>
 
           <div className="dashboard-nav-right">
+            <a
+              href={`/api/admin/interviews/${interview.id}/pdf`}
+              download={`assessment-report-${interview.id}.html`}
+              className="btn btn-secondary btn-sm"
+              style={{ fontSize: "0.75rem", display: "inline-flex", alignItems: "center", gap: "0.375rem" }}
+              title="Download structured evaluation report"
+            >
+              <Download size={14} />
+              <span>Download PDF</span>
+            </a>
             <Link
               href={`/interview/${interview.id}/report`}
               className="btn btn-secondary btn-sm"
@@ -265,7 +276,7 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
             <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
               <Sparkles size={12} className="text-[var(--color-primary)]" />
               <span>
-                Model: <strong>{interview.report?.modelName || "gpt-4o"}</strong> • Prompt: <strong>{interview.report?.promptVersion || "v2.1"}</strong>
+                Model: <strong>{interview.report?.modelName || "Not stamped"}</strong> • Prompt: <strong>{interview.report?.promptVersion || "—"}</strong>
               </span>
             </div>
           </div>
@@ -448,16 +459,16 @@ export default async function AdminInterviewDeepDivePage({ params }: PageProps) 
                         </div>
 
                         {/* Code Specific Metrics */}
-                        {evalData.codeCorrectness !== null && (
+                        {(evalData.codeCorrectness !== null || evalData.codeEfficiency !== null || evalData.codeReadability !== null) && (
                           <div className="mt-2 pt-3 border-t border-[var(--surface-border)] grid grid-cols-3 gap-2 text-center text-xs font-mono">
                             <div>
-                              Correctness: <strong>{evalData.codeCorrectness}/10</strong>
+                              Correctness: <strong>{evalData.codeCorrectness !== null ? `${evalData.codeCorrectness}/10` : "Not evaluated"}</strong>
                             </div>
                             <div>
-                              Efficiency: <strong>{evalData.codeEfficiency}/10</strong>
+                              Efficiency: <strong>{evalData.codeEfficiency !== null ? `${evalData.codeEfficiency}/10` : "Not evaluated"}</strong>
                             </div>
                             <div>
-                              Readability: <strong>{evalData.codeReadability}/10</strong>
+                              Readability: <strong>{evalData.codeReadability !== null ? `${evalData.codeReadability}/10` : "Not evaluated"}</strong>
                             </div>
                           </div>
                         )}
