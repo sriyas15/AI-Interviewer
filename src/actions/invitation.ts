@@ -195,6 +195,7 @@ export async function startInvitedInterviewAction(token: string) {
       // Re-verify inside transaction to prevent race conditions
       const currentInv = await tx.interviewInvitation.findUnique({
         where: { token },
+        include: { template: true },
       });
 
       if (!currentInv) {
@@ -221,8 +222,7 @@ export async function startInvitedInterviewAction(token: string) {
       const bankQuestions = await tx.bankQuestion.findMany({
         where: {
           OR: [
-            { role: { contains: currentInv.jobRole, mode: "insensitive" } },
-            { role: "GENERAL" },
+            { tags: { has: currentInv.jobRole } },
             { difficulty: currentInv.difficulty },
           ],
         },
