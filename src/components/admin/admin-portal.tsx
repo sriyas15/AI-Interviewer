@@ -327,7 +327,7 @@ export function AdminPortal({
       ) / 10
     : null;
   const agreedCount = reviewedWithScores.filter(
-    (i) => Math.abs((i.humanScore || 0) - (i.totalScore || 0)) <= 10
+    (i) => Math.abs((i.humanScore || 0) - (i.totalScore || 0)) <= 8
   ).length;
   const agreementRate = reviewedWithScores.length
     ? Math.round((agreedCount / reviewedWithScores.length) * 100)
@@ -1818,7 +1818,7 @@ export function AdminPortal({
               {agreementRate !== null && (
                 <div style={{ textAlign: "right" }}>
                   <span className="badge badge-success" style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
-                    {agreementRate}% Alignment (±10 pts)
+                    {agreementRate}% Alignment (within ±8 pts)
                   </span>
                 </div>
               )}
@@ -1838,6 +1838,13 @@ export function AdminPortal({
                   {avgScoreDelta !== null ? `${avgScoreDelta} pts` : "N/A"}
                 </div>
                 <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)" }}>mean absolute difference</span>
+              </div>
+              <div style={{ padding: "0.75rem 1rem", backgroundColor: "var(--bg-secondary)", borderRadius: "var(--radius-md)" }}>
+                <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Evaluation Trust Index</span>
+                <div style={{ fontSize: "1.35rem", fontWeight: 700, marginTop: "0.2rem", color: "var(--color-primary)" }}>
+                  {agreementRate !== null ? `${agreementRate}%` : "Pending"}
+                </div>
+                <span style={{ fontSize: "0.7rem", color: "var(--text-tertiary)" }}>within ±8 point tolerance</span>
               </div>
             </div>
 
@@ -1868,7 +1875,7 @@ export function AdminPortal({
                           <td><span className="badge badge-primary">{rev.totalScore}</span></td>
                           <td><span className="badge badge-success">{rev.humanScore}</span></td>
                           <td>
-                            <span style={{ color: delta <= 10 ? "var(--color-success)" : "var(--color-error)", fontWeight: 600 }}>
+                            <span style={{ color: delta <= 8 ? "var(--color-success)" : "var(--color-error)", fontWeight: 600 }}>
                               {delta} pts
                             </span>
                           </td>
