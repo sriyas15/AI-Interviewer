@@ -19,6 +19,33 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: ai_interviewer_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  judge0:
+    image: judge0/judge0:v1.13.0
+    container_name: ai_interviewer_judge0
+    restart: unless-stopped
+    ports:
+      - "2358:2358"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
   app:
     build:
       context: .
@@ -28,10 +55,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
       DATABASE_URL: "postgresql://postgres:password@postgres:5432/ai_interviewer"
+      REDIS_URL: "redis://redis:6379"
+      JUDGE0_URL: "http://judge0:2358"
       AUTH_SECRET: "replace-with-long-random-secret-in-production-env"
       NEXTAUTH_SECRET: "replace-with-long-random-secret-in-production-env"
       AUTH_URL: "http://localhost:3000"
@@ -46,4 +77,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
 
