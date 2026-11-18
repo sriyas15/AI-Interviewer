@@ -58,7 +58,9 @@ export function InterviewList({ interviews }: InterviewListProps) {
         const dueDate = interview.invitation?.expiresAt
           ? new Date(interview.invitation.expiresAt)
           : null;
-        const isPastDue = dueDate ? dueDate.getTime() < Date.now() : false;
+        const isPastDue = dueDate
+          ? dueDate.getTime() < new Date(interview.updatedAt).getTime()
+          : false;
 
         return (
           <Link
