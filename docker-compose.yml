@@ -36,15 +36,47 @@ services:
   judge0:
     image: judge0/judge0:v1.13.0
     container_name: ai_interviewer_judge0
+    privileged: true
     restart: unless-stopped
     ports:
       - "2358:2358"
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ai_interviewer
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai_interviewer_worker
+    command: ["npm", "run", "worker"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://postgres:password@postgres:5432/ai_interviewer"
+      REDIS_URL: "redis://redis:6379"
+      JUDGE0_URL: "http://judge0:2358"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      SMTP_HOST: "${SMTP_HOST:-smtp.gmail.com}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      SMTP_FROM: "${SMTP_FROM:-AI Interviewer <no-reply@ai-interviewer.com>}"
 
   app:
     build:

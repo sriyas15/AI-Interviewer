@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "worker": "tsx src/worker.ts",
     "lint": "eslint",
     "test": "tsx tests/run-tests.ts"
   },
@@ -25,6 +26,7 @@
     "next-auth": "^5.0.0-beta.32",
     "nodemailer": "^8.0.11",
     "pino": "^10.4.0",
+    "playwright": "^1.65.1",
     "prisma": "^6.19.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
