@@ -1,4 +1,5 @@
 import vm from "node:vm";
+import ts from "typescript";
 
 export interface TestCase {
   input: string;
@@ -37,36 +38,84 @@ function normalizeValue(val: any): string {
   return String(val);
 }
 
-function deepEqual(actual: any, expected: any): boolean {
-  if (actual === expected) return true;
-  if (actual === undefined && (expected === "undefined" || expected === undefined)) return true;
-  if (actual === null && (expected === "null" || expected === null)) return true;
-
-  const actualStr = normalizeValue(actual).trim().replace(/\s+/g, "");
-  const expectedStr = normalizeValue(expected).trim().replace(/\s+/g, "");
-  if (actualStr === expectedStr) return true;
-
-  if (typeof actual === "boolean" || typeof expected === "boolean") {
-    return actualStr.toLowerCase() === expectedStr.toLowerCase();
+/**
+ * Strict structural deep equality comparator.
+ * Enforces strict type consistency:
+ * - "[1, 2]" vs [1, 2] FAILS (string !== array)
+ * - "TRUE" vs true FAILS (string !== boolean)
+ * - Strict array and object structural recursion
+ */
+export function deepEqual(actual: any, expected: any): boolean {
+  // If expected is passed as a string representation of JSON (standard for test cases)
+  let parsedExpected = expected;
+  if (typeof expected === "string") {
+    const trimmed = expected.trim();
+    // Only parse if it represents an object, array, boolean, number or null
+    if (
+      (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      trimmed === "true" ||
+      trimmed === "false" ||
+      trimmed === "null" ||
+      (!isNaN(Number(trimmed)) && trimmed !== "")
+    ) {
+      try {
+        parsedExpected = JSON.parse(trimmed);
+      } catch {
+        parsedExpected = expected;
+      }
+    }
   }
 
-  const numActual = Number(actual);
-  const numExpected = Number(expected);
-  if (!isNaN(numActual) && !isNaN(numExpected) && Math.abs(numActual - numExpected) < 1e-6) {
+  return strictEqual(actual, parsedExpected);
+}
+
+function strictEqual(a: any, b: any): boolean {
+  if (a === b) return true;
+
+  // Enforce identical types (no coercion)
+  if (typeof a !== typeof b) return false;
+
+  if (a === null || b === null || a === undefined || b === undefined) {
+    return a === b;
+  }
+
+  if (typeof a === "number") {
+    if (Number.isNaN(a) && Number.isNaN(b)) return true;
+    return a === b;
+  }
+
+  if (typeof a !== "object") {
+    return a === b;
+  }
+
+  const aIsArr = Array.isArray(a);
+  const bIsArr = Array.isArray(b);
+  if (aIsArr !== bIsArr) return false;
+
+  if (aIsArr && bIsArr) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!strictEqual(a[i], b[i])) return false;
+    }
     return true;
   }
 
-  try {
-    const parsedActual = typeof actual === "object" ? actual : JSON.parse(actualStr);
-    const parsedExpected = typeof expected === "object" ? expected : JSON.parse(expectedStr);
-    return JSON.stringify(parsedActual) === JSON.stringify(parsedExpected);
-  } catch {
-    return false;
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+
+  for (let i = 0; i < aKeys.length; i++) {
+    const key = aKeys[i];
+    if (key !== bKeys[i]) return false;
+    if (!strictEqual(a[key], b[key])) return false;
   }
+
+  return true;
 }
 
 /**
- * Executes candidate JavaScript/TypeScript code securely on the server using Node's isolated vm.
+ * Executes candidate JavaScript/TypeScript code using isolated VM with prototype protection.
  */
 export function executeCodeAgainstTestCases(
   rawCode: string,
@@ -79,7 +128,7 @@ export function executeCodeAgainstTestCases(
       passed: null,
       total: null,
       results: [],
-      logs: [`Language ${language} does not use VM test runner; evaluation is performed by AI grader.`],
+      logs: [`Language ${language} does not use VM test runner; evaluation is performed by AI grader or Judge0.`],
     };
   }
 
@@ -92,13 +141,63 @@ export function executeCodeAgainstTestCases(
     };
   }
 
-  // Pre-process TypeScript type annotations
+  // Security guard against sandbox escape patterns
+  const forbiddenPatterns = [
+    /process\s*\./,
+    /child_process/,
+    /constructor\s*\.\s*constructor/,
+    /__proto__/,
+    /importScripts/,
+    /require\s*\(/,
+    /fs\s*\./,
+  ];
+
+  for (const pattern of forbiddenPatterns) {
+    if (pattern.test(rawCode)) {
+      return {
+        passed: 0,
+        total: testCases.length,
+        results: testCases.map((tc) => ({
+          input: tc.input,
+          expected: normalizeValue(tc.expectedOutput),
+          actual: "SecurityViolation",
+          passed: false,
+          isHidden: !!tc.isHidden,
+          error: "Sandbox security violation: forbidden identifier or escape attempt detected",
+        })),
+        logs: ["Security Exception: Code contained forbidden identifiers (process/fs/escape pattern)."],
+        executionError: "Sandbox security policy violation",
+      };
+    }
+  }
+
+  // Compile TypeScript using official compiler transpileModule (Item 7)
   let executableCode = rawCode;
   if (normLang === "typescript") {
-    executableCode = executableCode
-      .replace(/(?:interface|type)\s+[A-Za-z0-9_$]+(?:\s*<[^>]+>)?\s*(?:=\s*[^;]+;|{[^}]*})/g, "")
-      .replace(/:\s*[A-Za-z0-9_$]+(?:\[\])?(?=[,\)])/g, "")
-      .replace(/\):\s*[A-Za-z0-9_$]+(?:\[\])?\s*\{/g, ") {");
+    try {
+      const transpiled = ts.transpileModule(rawCode, {
+        compilerOptions: {
+          module: ts.ModuleKind.CommonJS,
+          target: ts.ScriptTarget.ES2022,
+          removeComments: false,
+        },
+      });
+      executableCode = transpiled.outputText;
+    } catch (tsErr: any) {
+      return {
+        passed: 0,
+        total: testCases.length,
+        results: testCases.map((tc) => ({
+          input: tc.input,
+          expected: normalizeValue(tc.expectedOutput),
+          actual: "CompileError",
+          passed: false,
+          isHidden: !!tc.isHidden,
+          error: `TypeScript compilation error: ${tsErr.message}`,
+        })),
+        logs: [`TypeScript compile error: ${tsErr.message}`],
+      };
+    }
   }
 
   const logs: string[] = [];
@@ -122,6 +221,10 @@ export function executeCodeAgainstTestCases(
     parseFloat,
     isNaN,
     isFinite,
+    process: undefined,
+    require: undefined,
+    global: undefined,
+    globalThis: undefined,
   };
 
   const context = vm.createContext(sandbox);
@@ -205,14 +308,14 @@ export function executeCodeAgainstTestCases(
           passed,
           isHidden: !!tc.isHidden,
         });
-      } catch (err: any) {
+      } catch (tcErr: any) {
         results.push({
           input: tc.input,
           expected: normalizeValue(tc.expectedOutput),
-          actual: "Runtime Error",
+          actual: `RuntimeError: ${tcErr.message}`,
           passed: false,
           isHidden: !!tc.isHidden,
-          error: err.message || "Runtime error during test execution",
+          error: tcErr.message,
         });
       }
     }
@@ -230,13 +333,14 @@ export function executeCodeAgainstTestCases(
       results: testCases.map((tc) => ({
         input: tc.input,
         expected: normalizeValue(tc.expectedOutput),
-        actual: "Execution Failure",
+        actual: `Error: ${err.message}`,
         passed: false,
         isHidden: !!tc.isHidden,
-        error: err.message || "Script compilation/execution failed",
+        error: err.message,
       })),
-      logs,
-      executionError: err.message || "Script failed to compile or timed out",
+      logs: [`Execution failed: ${err.message}`],
+      executionError: err.message,
     };
   }
 }
+

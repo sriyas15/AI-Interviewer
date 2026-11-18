@@ -325,23 +325,51 @@ export async function getOrGenerateNextQuestion(interviewId: string) {
       `Provide concrete architectural or practical implementation details.`
     ];
 
+    let finalType = generated.type;
+    let finalContent = generated.content;
+    let finalContext = generated.context || null;
+    let finalExpectedTopics = generated.expectedTopics;
+    let finalHints = tailoredHints;
+    let finalStarterCode = generated.starterCode ? { default: generated.starterCode } : undefined;
+    let finalTestCases = generated.testCases;
+
+    // For CODING questions, prioritize drawing from verified question bank questions
+    if (generated.type === "CODING") {
+      const bankCodingQuestions = await db.bankQuestion.findMany({
+        where: {
+          type: "CODING",
+          content: { notIn: existingQuestions.map((q) => q.content) },
+        },
+        orderBy: { createdAt: "asc" },
+      });
+
+      if (bankCodingQuestions.length > 0) {
+        const matched = bankCodingQuestions.find((bq) => bq.difficulty === interview.difficulty) || bankCodingQuestions[0];
+        finalContent = matched.content;
+        finalExpectedTopics = matched.expectedTopics;
+        if (matched.hints && matched.hints.length > 0) finalHints = matched.hints;
+        finalTestCases = (matched.testCases as any[]) || [];
+        if ((matched as any).context) finalContext = (matched as any).context;
+        if ((matched as any).starterCode) finalStarterCode = (matched as any).starterCode;
+      } else if (!finalTestCases || !Array.isArray(finalTestCases)) {
+        // When no verified tests exist (and no bank match), do NOT invent generic/mismatched tests
+        finalTestCases = [];
+      }
+    }
+
     // Save question in database with problem-tailored test cases
     const newQuestion = await db.question.create({
       data: {
         interviewId: interview.id,
         orderIndex: nextOrderIndex,
-        type: generated.type,
-        content: generated.content,
-        context: generated.context || null,
-        expectedTopics: generated.expectedTopics,
-        hints: tailoredHints,
+        type: finalType,
+        content: finalContent,
+        context: finalContext,
+        expectedTopics: finalExpectedTopics,
+        hints: finalHints,
         hintsRevealed: 0,
-        starterCode: generated.starterCode ? { default: generated.starterCode } : undefined,
-        testCases: generated.testCases ?? (generated.type === "CODING" ? [
-          { input: "[[1,3],[2,6],[8,10],[15,18]]", expectedOutput: [[1,6],[8,10],[15,18]], isHidden: false, explanation: "Standard merge" },
-          { input: "[[1,4],[4,5]]", expectedOutput: [[1,5]], isHidden: false, explanation: "Adjacent boundary" },
-          { input: "[[1,4],[0,4]]", expectedOutput: [[0,4]], isHidden: true, explanation: "Enclosing interval" }
-        ] : undefined),
+        starterCode: finalStarterCode,
+        testCases: finalTestCases ?? undefined,
       },
       include: {
         response: true,
