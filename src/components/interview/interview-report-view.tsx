@@ -181,7 +181,7 @@ export function InterviewReportView({
               </span>
               <span className="text-xs text-[var(--text-tertiary)] flex items-center gap-1">
                 <Clock size={12} />
-                Completed on {new Date(interview.completedAt || Date.now()).toLocaleDateString()}
+                Completed on {new Date(interview.completedAt || interview.createdAt).toLocaleDateString()}
               </span>
             </div>
 
