@@ -87,6 +87,18 @@ export const questionGenerationSchema = z.object({
   expectedTopics: z
     .array(z.string())
     .describe("Topics the answer should ideally cover"),
+  hints: z.array(z.string()).optional(),
+  starterCode: z.string().optional(),
+  testCases: z
+    .array(
+      z.object({
+        input: z.string(),
+        expectedOutput: z.any(),
+        isHidden: z.boolean().default(false),
+        explanation: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 export const evaluationSchema = z.object({
@@ -105,13 +117,13 @@ export const evaluationSchema = z.object({
     .string()
     .optional()
     .describe("Follow-up question if needed"),
-  modelName: z.string().optional(),
-  promptVersion: z.string().optional(),
-  tokenCount: z.number().optional(),
-  estimatedCost: z.number().optional(),
-  codeCorrectness: z.number().optional(),
-  codeEfficiency: z.number().optional(),
-  codeReadability: z.number().optional(),
+  modelName: z.string().nullable().optional(),
+  promptVersion: z.string().nullable().optional(),
+  tokenCount: z.number().nullable().optional(),
+  estimatedCost: z.number().nullable().optional(),
+  codeCorrectness: z.number().nullable().optional(),
+  codeEfficiency: z.number().nullable().optional(),
+  codeReadability: z.number().nullable().optional(),
 });
 
 export const reportSchema = z.object({
@@ -120,16 +132,16 @@ export const reportSchema = z.object({
   technicalScore: z.number().min(0).max(100),
   communicationScore: z.number().min(0).max(100),
   problemSolvingScore: z.number().min(0).max(100),
-  codeQualityScore: z.number().min(0).max(100).optional(),
+  codeQualityScore: z.number().min(0).max(100).nullable().optional(),
   strengths: z.array(z.string()),
   weaknesses: z.array(z.string()),
   recommendations: z
     .array(z.string())
     .describe("Actionable suggestions for improvement"),
-  modelName: z.string().optional(),
-  promptVersion: z.string().optional(),
-  tokenCount: z.number().optional(),
-  estimatedCost: z.number().optional(),
+  modelName: z.string().nullable().optional(),
+  promptVersion: z.string().nullable().optional(),
+  tokenCount: z.number().nullable().optional(),
+  estimatedCost: z.number().nullable().optional(),
 });
 
 export const loginSchema = z.object({
