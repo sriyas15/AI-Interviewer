@@ -188,140 +188,147 @@ export async function startInvitedInterviewAction(token: string) {
       return { success: true, interviewId: invitation.interviewId };
     }
 
-    // 6. ATOMIC CLAIM: Conditional update ensures single-use even if clicked multiple times concurrently
-    const claimResult = await db.interviewInvitation.updateMany({
-      where: {
-        token,
-        status: InvitationStatus.INVITED,
-        expiresAt: { gt: new Date() },
-      },
-      data: {
-        status: InvitationStatus.STARTED,
-      },
-    });
+    // 6. ATOMIC TRANSACTION: Claim invitation, select role-matched bank questions, and create interview
+    const targetCount = invitation.template?.questionCount || 4;
 
-    if (claimResult.count === 0) {
-      // Re-check if it was claimed by concurrent request of the same candidate
-      const currentInv = await db.interviewInvitation.findUnique({
+    const result = await db.$transaction(async (tx) => {
+      // Re-verify inside transaction to prevent race conditions
+      const currentInv = await tx.interviewInvitation.findUnique({
         where: { token },
       });
-      if (currentInv?.status === InvitationStatus.STARTED && currentInv.interviewId) {
-        return { success: true, interviewId: currentInv.interviewId };
+
+      if (!currentInv) {
+        throw new Error("Invitation not found");
       }
-      return {
-        success: false,
-        error: "This invitation is no longer available or was already started.",
-      };
-    }
+      if (currentInv.status === InvitationStatus.STARTED && currentInv.interviewId) {
+        return { interviewId: currentInv.interviewId };
+      }
+      if (currentInv.status !== InvitationStatus.INVITED || new Date() > currentInv.expiresAt) {
+        throw new Error("This invitation is no longer valid or has expired.");
+      }
 
-    // 7. Questions setup: Curated Bank questions or default curriculum
-    let starterQuestions: Array<{
-      content: string;
-      type: any;
-      orderIndex: number;
-      expectedTopics: string[];
-      hints?: string[];
-      context?: string | null;
-      testCases?: any;
-    }> = [];
+      // 7. Questions setup: Role & difficulty filtered sampling from Bank
+      let starterQuestions: Array<{
+        content: string;
+        type: any;
+        orderIndex: number;
+        expectedTopics: string[];
+        hints?: string[];
+        context?: string | null;
+        testCases?: any;
+      }> = [];
 
-    const bankQuestions = await db.bankQuestion.findMany({
-      take: invitation.template?.questionCount || 4,
-      orderBy: { createdAt: "asc" },
+      const bankQuestions = await tx.bankQuestion.findMany({
+        where: {
+          OR: [
+            { role: { contains: currentInv.jobRole, mode: "insensitive" } },
+            { role: "GENERAL" },
+            { difficulty: currentInv.difficulty },
+          ],
+        },
+      });
+
+      if (bankQuestions.length > 0) {
+        // Randomize questions so each candidate receives a varied assessment
+        const shuffled = [...bankQuestions].sort(() => 0.5 - Math.random());
+        starterQuestions = shuffled.slice(0, targetCount).map((bq, idx) => ({
+          orderIndex: idx + 1,
+          type: bq.type,
+          content: bq.content,
+          expectedTopics: bq.expectedTopics,
+          hints: bq.hints && bq.hints.length > 0 ? bq.hints : [
+            `Review core ${currentInv.jobRole} concepts and system constraints.`,
+            `Analyze edge cases and trade-offs before finalizing your solution.`,
+            `Structure your approach clearly and state any key assumptions.`
+          ],
+          testCases: (bq as any).testCases ?? undefined,
+          context: (bq as any).context ?? null,
+        }));
+      }
+
+      // If bank had fewer questions, complete with tailored curriculum
+      if (starterQuestions.length === 0) {
+        starterQuestions = [
+          {
+            orderIndex: 1,
+            type: "TECHNICAL",
+            content: `Explain the core architectural principles you rely on when building scalable applications in ${currentInv.jobRole}.`,
+            expectedTopics: ["Architecture", "Scalability", "Best Practices"],
+            hints: [
+              "Consider separation of concerns, layering, and maintainability.",
+              "Discuss how you handle state management, caching, or asynchronous workflows.",
+              "Cite a concrete project or architecture you have designed or maintained."
+            ],
+          },
+          {
+            orderIndex: 2,
+            type: "CODING",
+            content: "Write a function mergeIntervals(intervals) that accepts an array of intervals [start, end] and merges all overlapping intervals.",
+            context: "// Example:\n// mergeIntervals([[1,3],[2,6],[8,10],[15,18]]) => [[1,6],[8,10],[15,18]]",
+            expectedTopics: ["Sorting", "Interval Merging", "O(N log N) Complexity"],
+            hints: [
+              "First, sort intervals by start value: intervals.sort((a,b) => a[0] - b[0]).",
+              "Iterate through intervals and merge whenever current[0] <= previous[1].",
+              "Update previous[1] with Math.max(previous[1], current[1])."
+            ],
+            testCases: [
+              { input: "[[1,3],[2,6],[8,10],[15,18]]", expectedOutput: [[1,6],[8,10],[15,18]], isHidden: false, explanation: "Standard merge" },
+              { input: "[[1,4],[4,5]]", expectedOutput: [[1,5]], isHidden: false, explanation: "Adjacent boundary" },
+              { input: "[[1,4],[0,4]]", expectedOutput: [[0,4]], isHidden: true, explanation: "Enclosing interval" }
+            ],
+          },
+          {
+            orderIndex: 3,
+            type: "BEHAVIORAL",
+            content: "Describe a situation where you had a disagreement with a team member about a technical approach. How did you resolve it?",
+            expectedTopics: ["Conflict Resolution", "Collaboration", "Communication"],
+            hints: [
+              "Frame your response using the STAR method (Situation, Task, Action, Result).",
+              "Focus on objective data (benchmarks, prototypes, trade-off matrices) rather than opinions.",
+              "Emphasize the positive outcome for team alignment and product delivery."
+            ],
+          },
+        ];
+      }
+
+      // 8. Create the Interview session with PENDING status and ASSESSMENT mode
+      const interview = await tx.interview.create({
+        data: {
+          userId: session.user.id,
+          title: currentInv.template?.title || `${currentInv.jobRole} Assessment`,
+          jobRole: currentInv.jobRole,
+          difficulty: currentInv.difficulty,
+          topics: [currentInv.jobRole, "Core Competencies", "Problem Solving"],
+          status: InterviewStatus.PENDING,
+          mode: "ASSESSMENT",
+          templateId: currentInv.templateId || null,
+          questions: {
+            create: starterQuestions.map((q) => ({
+              orderIndex: q.orderIndex,
+              type: q.type,
+              content: q.content,
+              context: (q as any).context || null,
+              expectedTopics: q.expectedTopics,
+              hints: (q as any).hints || [],
+              testCases: (q as any).testCases ?? undefined,
+            })),
+          },
+        },
+      });
+
+      // 9. Atomically mark invitation STARTED and link interviewId
+      await tx.interviewInvitation.update({
+        where: { id: currentInv.id },
+        data: {
+          status: InvitationStatus.STARTED,
+          interviewId: interview.id,
+        },
+      });
+
+      return { interviewId: interview.id };
     });
 
-    if (bankQuestions.length > 0) {
-      starterQuestions = bankQuestions.map((bq, idx) => ({
-        orderIndex: idx + 1,
-        type: bq.type,
-        content: bq.content,
-        expectedTopics: bq.expectedTopics,
-        hints: bq.hints && bq.hints.length > 0 ? bq.hints : [
-          `Review core ${invitation.jobRole} concepts and system constraints.`,
-          `Analyze edge cases and trade-offs before finalizing your solution.`,
-          `Structure your approach clearly and state any key assumptions.`
-        ],
-        testCases: (bq as any).testCases ?? undefined,
-        context: (bq as any).context ?? null,
-      }));
-    } else {
-      // Standard curriculum
-      starterQuestions = [
-        {
-          orderIndex: 1,
-          type: "TECHNICAL",
-          content: `Explain the core architectural principles you rely on when building scalable applications in ${invitation.jobRole}.`,
-          expectedTopics: ["Architecture", "Scalability", "Best Practices"],
-          hints: [
-            "Consider separation of concerns, layering, and maintainability.",
-            "Discuss how you handle state management, caching, or asynchronous workflows.",
-            "Cite a concrete project or architecture you have designed or maintained."
-          ],
-        },
-        {
-          orderIndex: 2,
-          type: "CODING",
-          content: "Given an array of integers nums and an integer target, return indices [i, j] of the two numbers such that they add up to target. You may assume each input has exactly one solution.",
-          context: "// Example:\n// twoSum([2, 7, 11, 15], 9) => [0, 1]\n// twoSum([3, 2, 4], 6) => [1, 2]",
-          expectedTopics: ["Hash Maps", "Time/Space Complexity", "Array Traversal"],
-          hints: [
-            "Consider using a Hash Map to store numbers you have already visited along with their indices.",
-            "For each number x, check if the complement (target - x) exists in your map.",
-            "This allows solving the problem in a single pass O(n) time complexity rather than O(n²)."
-          ],
-          testCases: [
-            { input: "[2, 7, 11, 15], 9", expectedOutput: "[0, 1]", isHidden: false, explanation: "nums[0] + nums[1] = 2 + 7 = 9" },
-            { input: "[3, 2, 4], 6", expectedOutput: "[1, 2]", isHidden: false, explanation: "nums[1] + nums[2] = 2 + 4 = 6" },
-            { input: "[3, 3], 6", expectedOutput: "[0, 1]", isHidden: false, explanation: "nums[0] + nums[1] = 3 + 3 = 6" }
-          ],
-        },
-        {
-          orderIndex: 3,
-          type: "BEHAVIORAL",
-          content: "Describe a situation where you had a disagreement with a team member about a technical approach. How did you resolve it?",
-          expectedTopics: ["Conflict Resolution", "Collaboration", "Communication"],
-          hints: [
-            "Frame your response using the STAR method (Situation, Task, Action, Result).",
-            "Focus on objective data (benchmarks, prototypes, trade-off matrices) rather than opinions.",
-            "Emphasize the positive outcome for team alignment and product delivery."
-          ],
-        },
-      ];
-    }
-
-    // 8. Create the Interview session with PENDING status (ready for Lobby check)
-    const interview = await db.interview.create({
-      data: {
-        userId: session.user.id,
-        title: invitation.template?.title || `${invitation.jobRole} Assessment`,
-        jobRole: invitation.jobRole,
-        difficulty: invitation.difficulty,
-        topics: [invitation.jobRole, "Core Competencies", "Problem Solving"],
-        status: InterviewStatus.PENDING,
-        templateId: invitation.templateId || null,
-        questions: {
-          create: starterQuestions.map((q) => ({
-            orderIndex: q.orderIndex,
-            type: q.type,
-            content: q.content,
-            context: (q as any).context || null,
-            expectedTopics: q.expectedTopics,
-            hints: (q as any).hints || [],
-            testCases: (q as any).testCases ?? undefined,
-          })),
-        },
-      },
-    });
-
-    // 9. Associate the interviewId with the invitation
-    await db.interviewInvitation.update({
-      where: { token },
-      data: {
-        interviewId: interview.id,
-      },
-    });
-
-    return { success: true, interviewId: interview.id };
+    return { success: true, interviewId: result.interviewId };
   } catch (error: any) {
     console.error("startInvitedInterviewAction error:", error);
     return {
