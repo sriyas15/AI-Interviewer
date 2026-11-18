@@ -46,7 +46,7 @@ export async function processInterviewCompletion(interviewId: string) {
       include: {
         user: true,
         template: true,
-        invitations: {
+        invitation: {
           include: {
             invitedBy: true,
           },
@@ -161,7 +161,7 @@ export async function processInterviewCompletion(interviewId: string) {
     // 4. Send Recruiter and Candidate Email Notifications
     const candidateEmail = interview.user.email;
     const candidateName = interview.user.name || "Candidate";
-    const recruiterEmail = interview.invitations[0]?.invitedBy?.email || process.env.RECRUITER_NOTIFICATION_EMAIL;
+    const recruiterEmail = interview.invitation?.invitedBy?.email || process.env.RECRUITER_NOTIFICATION_EMAIL;
 
     await sendCandidateCompletionEmail({
       candidateName,
