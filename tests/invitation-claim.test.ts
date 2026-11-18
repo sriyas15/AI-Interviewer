@@ -1,108 +1,81 @@
 import assert from "node:assert/strict";
-
-/**
- * Invitation Claim and Authorization Test Suite
- */
-
-interface MockInvitation {
-  token: string;
-  candidateEmail: string;
-  status: "INVITED" | "STARTED" | "COMPLETED" | "EXPIRED" | "REVOKED";
-  expiresAt: Date;
-  interviewId?: string;
-}
-
-export function validateInviteClaim(
-  invitation: MockInvitation,
-  sessionEmail?: string | null
-): { success: boolean; error?: string } {
-  const now = new Date();
-
-  if (invitation.status === "EXPIRED" || now > invitation.expiresAt) {
-    return { success: false, error: "This invitation link has expired." };
-  }
-
-  if (invitation.status === "REVOKED") {
-    return { success: false, error: "This invitation has been revoked." };
-  }
-
-  if (invitation.status === "COMPLETED") {
-    return { success: false, error: "This interview has already been completed." };
-  }
-
-  if (sessionEmail) {
-    const normSession = sessionEmail.toLowerCase().trim();
-    const normCandidate = invitation.candidateEmail.toLowerCase().trim();
-    if (normSession !== normCandidate) {
-      return {
-        success: false,
-        error: `This invitation was issued to ${invitation.candidateEmail}. You are currently signed in as ${sessionEmail}. Please switch accounts or log out to continue.`,
-      };
-    }
-  }
-
-  return { success: true };
-}
+import { validateInviteClaimEligibility, InvitationClaimData } from "../src/lib/invitation-claim";
 
 export async function runInvitationClaimTests() {
-  console.log("▶ Running Invitation Claim & Authorization Tests...");
+  console.log("▶ Running Real Invitation Claim Tests (from src/lib/invitation-claim)...");
 
-  const baseInvite: MockInvitation = {
-    token: "valid-secure-token-123",
+  const futureDate = new Date(Date.now() + 86400000);
+  const pastDate = new Date(Date.now() - 86400000);
+
+  const baseInvite: InvitationClaimData = {
     candidateEmail: "candidate@example.com",
     status: "INVITED",
-    expiresAt: new Date(Date.now() + 86400000), // tomorrow
+    expiresAt: futureDate,
   };
 
   // 1. Valid matching email claim
-  const validClaim = validateInviteClaim(baseInvite, "candidate@example.com");
-  assert.equal(validClaim.success, true);
+  {
+    const res = validateInviteClaimEligibility(baseInvite, "candidate@example.com");
+    assert.equal(res.valid, true);
+    assert.equal(res.error, undefined);
+  }
 
-  // 2. Case-insensitive and whitespace-trimmed email claim
-  const mixedCaseClaim = validateInviteClaim(baseInvite, "  Candidate@Example.COM ");
-  assert.equal(mixedCaseClaim.success, true);
+  // 2. Case insensitive & trimmed email match
+  {
+    const res = validateInviteClaimEligibility(baseInvite, "  CANDIDATE@example.COM  ");
+    assert.equal(res.valid, true);
+  }
 
-  // 3. Email mismatch rejection
-  const mismatchClaim = validateInviteClaim(baseInvite, "other.recruiter@example.com");
-  assert.equal(mismatchClaim.success, false);
-  assert.match(mismatchClaim.error || "", /This invitation was issued to candidate@example.com/);
+  // 3. Mismatched email security check
+  {
+    const res = validateInviteClaimEligibility(baseInvite, "intruder@malicious.com");
+    assert.equal(res.valid, false);
+    assert.match(res.error || "", /issued to candidate@example\.com/);
+  }
 
-  // 4. Expired status rejection
-  const expiredInvite: MockInvitation = {
-    ...baseInvite,
-    status: "EXPIRED",
-  };
-  const expClaim = validateInviteClaim(expiredInvite, "candidate@example.com");
-  assert.equal(expClaim.success, false);
-  assert.match(expClaim.error || "", /invitation link has expired/);
+  // 4. Expired status
+  {
+    const expiredStatusInvite: InvitationClaimData = {
+      ...baseInvite,
+      status: "EXPIRED",
+    };
+    const res = validateInviteClaimEligibility(expiredStatusInvite, "candidate@example.com");
+    assert.equal(res.valid, false);
+    assert.match(res.error || "", /expired/i);
+  }
 
-  // 5. Past expiration date rejection
-  const pastDateInvite: MockInvitation = {
-    ...baseInvite,
-    expiresAt: new Date(Date.now() - 3600000), // 1 hour ago
-  };
-  const pastClaim = validateInviteClaim(pastDateInvite, "candidate@example.com");
-  assert.equal(pastClaim.success, false);
-  assert.match(pastClaim.error || "", /invitation link has expired/);
+  // 5. Expired date
+  {
+    const expiredDateInvite: InvitationClaimData = {
+      ...baseInvite,
+      expiresAt: pastDate,
+    };
+    const res = validateInviteClaimEligibility(expiredDateInvite, "candidate@example.com");
+    assert.equal(res.valid, false);
+    assert.match(res.error || "", /expired/i);
+  }
 
-  // 6. Revoked status rejection
-  const revokedInvite: MockInvitation = {
-    ...baseInvite,
-    status: "REVOKED",
-  };
-  const revClaim = validateInviteClaim(revokedInvite, "candidate@example.com");
-  assert.equal(revClaim.success, false);
-  assert.match(revClaim.error || "", /invitation has been revoked/);
+  // 6. Revoked invitation
+  {
+    const revokedInvite: InvitationClaimData = {
+      ...baseInvite,
+      status: "REVOKED",
+    };
+    const res = validateInviteClaimEligibility(revokedInvite, "candidate@example.com");
+    assert.equal(res.valid, false);
+    assert.match(res.error || "", /revoked/i);
+  }
 
-  // 7. Completed status rejection
-  const completedInvite: MockInvitation = {
-    ...baseInvite,
-    status: "COMPLETED",
-  };
-  const compClaim = validateInviteClaim(completedInvite, "candidate@example.com");
-  assert.equal(compClaim.success, false);
-  assert.match(compClaim.error || "", /interview has already been completed/);
+  // 7. Completed interview link blocked
+  {
+    const completedInvite: InvitationClaimData = {
+      ...baseInvite,
+      status: "COMPLETED",
+    };
+    const res = validateInviteClaimEligibility(completedInvite, "candidate@example.com");
+    assert.equal(res.valid, false);
+    assert.match(res.error || "", /already been completed/i);
+  }
 
   console.log("  ✔ All Invitation Claim Tests Passed!");
 }
-
