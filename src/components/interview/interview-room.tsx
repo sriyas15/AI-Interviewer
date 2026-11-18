@@ -24,6 +24,7 @@ import {
 import { AIAvatar, AIStatus } from "./ai-avatar";
 import { CodeEditor } from "./code-editor";
 import { ProctoringGuard } from "./proctoring-guard";
+import { LiveKitAudioSession } from "./livekit-audio-session";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import {
   getOrGenerateNextQuestion,
@@ -455,6 +456,9 @@ export function InterviewRoom({ interview }: InterviewRoomProps) {
           >
             <span>Q: {formatTimer(secondsElapsed)}</span>
           </div>
+
+          {/* LiveKit WebRTC Real-Time Voice Audio Session */}
+          <LiveKitAudioSession interviewId={interview.id} />
 
           {/* High Contrast Accessibility Toggle */}
           <button
