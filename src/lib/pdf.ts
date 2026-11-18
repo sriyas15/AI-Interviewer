@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { logger } from "./logger";
 
 export interface PdfReportData {
   candidateName: string;
@@ -213,5 +214,32 @@ export async function generateReportPdfBuffer(interviewId: string): Promise<Buff
   };
 
   const html = buildReportHtml(reportData);
-  return Buffer.from(html, "utf-8");
+
+  try {
+    const { chromium } = await import("playwright");
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
+
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: "load", timeout: 10000 });
+      const pdfBuffer = await page.pdf({
+        format: "A4",
+        printBackground: true,
+        margin: { top: "15mm", bottom: "15mm", left: "15mm", right: "15mm" },
+      });
+      return Buffer.from(pdfBuffer);
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  } catch (err: any) {
+    logger.warn({
+      event: "playwright_pdf_fallback",
+      message: "Playwright headless browser unavailable; returning printable HTML report document.",
+      error: err.message,
+    });
+    return Buffer.from(html, "utf-8");
+  }
 }
