@@ -170,7 +170,7 @@ export async function generateReportPdfBuffer(interviewId: string): Promise<Buff
     include: {
       user: true,
       report: true,
-      activityEvents: { orderBy: { createdAt: "asc" } },
+      activities: { orderBy: { timestamp: "asc" } },
       questions: {
         orderBy: { orderIndex: "asc" },
         include: { response: { include: { evaluation: true } } },
@@ -205,10 +205,10 @@ export async function generateReportPdfBuffer(interviewId: string): Promise<Buff
       feedback: q.response?.evaluation?.feedback,
       code: q.response?.code,
     })),
-    flaggedEvents: interview.activityEvents.map((ev) => ({
+    flaggedEvents: interview.activities.map((ev) => ({
       type: ev.type,
       description: ev.description,
-      createdAt: new Date(ev.createdAt).toLocaleTimeString(),
+      createdAt: new Date(ev.timestamp).toLocaleTimeString(),
     })),
   };
 
