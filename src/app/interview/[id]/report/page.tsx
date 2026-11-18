@@ -15,6 +15,7 @@ import {
 import { InterviewReportView } from "@/components/interview/interview-report-view";
 import { toggleReleaseFeedbackAction } from "@/actions/interview";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { ReportStatusRefresher } from "@/components/interview/report-status-refresher";
 
 export const instant = false;
 
@@ -237,8 +238,9 @@ export default async function InterviewReportPage({ params, searchParams }: Page
         <div className="setup-body text-center py-16">
           <h2 className="text-xl font-bold">Report Synthesis In Progress</h2>
           <p className="text-sm text-[var(--text-secondary)] mt-2">
-            The interview has completed and the report is being synthesized. Please check back shortly.
+            The interview has completed and the report is being synthesized by our AI evaluator.
           </p>
+          <ReportStatusRefresher />
         </div>
       </div>
     );
