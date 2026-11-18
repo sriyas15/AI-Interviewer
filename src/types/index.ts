@@ -51,6 +51,9 @@ export interface Interview {
   difficulty: Difficulty;
   topics: string[];
   status: InterviewStatus;
+  mode?: "PRACTICE" | "ASSESSMENT";
+  reportStatus?: "PENDING" | "GENERATING" | "READY" | "FAILED";
+  extraTimeMinutes?: number;
   totalScore: number | null;
   startedAt: Date | null;
   completedAt: Date | null;
